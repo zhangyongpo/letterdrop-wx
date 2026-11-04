@@ -1,0 +1,25 @@
+<!-- pages/game/game.wxml —— 游戏页：Canvas 掉落 + HUD + 结束卡片 -->
+<view class="game">
+  <canvas type="2d" id="gameCanvas" class="canvas" bindtap="onTapCanvas"></canvas>
+
+  <!-- HUD：顶部得分（醒目）+ 生命/速度档 -->
+  <view class="hud" wx:if="{{started && !gameOver}}">
+    <view class="hud-score {{scoreBump ? 'bump' : ''}}">得分 {{score}}</view>
+    <view class="hud-meta">生命 {{lives}} · 速度档 {{level}}</view>
+  </view>
+
+  <!-- 降级模式提示 -->
+  <view class="tip" wx:if="{{mode === 'tap' && started && !gameOver}}">
+    点击下落的字母即可消除（当前未接入语音识别）
+  </view>
+
+  <!-- 结束卡片 -->
+  <view class="overlay" wx:if="{{gameOver}}">
+    <view class="card">
+      <view class="card-title">游戏结束</view>
+      <view class="card-score">本局得分 {{score}}</view>
+      <view class="card-best">最高分 {{best}}</view>
+      <button class="btn-primary" bindtap="restart">再来一局</button>
+    </view>
+  </view>
+</view>

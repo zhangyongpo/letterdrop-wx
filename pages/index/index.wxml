@@ -1,0 +1,10 @@
+<!-- pages/index/index.wxml —— 主页：静态背景 + 开始按钮 -->
+<view class="home">
+  <view class="home-bg"></view>
+  <view class="home-content">
+    <view class="title">字母掉落</view>
+    <view class="subtitle">念出字母读音，让它在落地前消失</view>
+    <button class="btn-primary start-btn" bindtap="startGame">开始游戏</button>
+    <view class="best">最高分：{{best}}</view>
+  </view>
+</view>
