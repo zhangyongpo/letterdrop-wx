@@ -4,6 +4,8 @@
 //   TENCENT_SECRET_ID / TENCENT_SECRET_KEY —— 腾讯云账号（实名后开通「语音识别」）
 //   ASR_REGION —— 可选，默认 ap-guangzhou
 //   ASR_HOTWORD_ID —— 可选，控制台创建的热词表 ID（提升 A-Z 字母识别率）
+//   ASR_VOCAB_ID —— 可选，自学习词表 ID（强烈推荐：把识别空间限定到 26 个字母名，
+//                   比热词更强制，念字母准确率显著提升）
 //
 // 部署：微信开发者工具 -> 云开发 -> 右键 cloudfunctions/asr -> 上传并部署：云端安装依赖
 
@@ -40,7 +42,8 @@ exports.main = async (event) => {
       VoiceFormat: 'wav',
       UsrAudioKey: Date.now() + '_' + Math.floor(Math.random() * 1e6),
       Data: audioBase64,
-      ...(process.env.ASR_HOTWORD_ID ? { HotWordId: process.env.ASR_HOTWORD_ID } : {})
+      ...(process.env.ASR_HOTWORD_ID ? { HotWordId: process.env.ASR_HOTWORD_ID } : {}),
+      ...(process.env.ASR_VOCAB_ID ? { VocabId: process.env.ASR_VOCAB_ID } : {})
     });
     // 兼容不同 SDK 版本的返回结构
     const text = (resp && (resp.Result || (resp.Response && resp.Response.Result))) || '';

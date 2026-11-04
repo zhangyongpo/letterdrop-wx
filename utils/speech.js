@@ -8,18 +8,44 @@
 //   3. 在云函数 asr 的配置里设置环境变量 TENCENT_SECRET_ID / TENCENT_SECRET_KEY（腾讯云账号，实名后开通 ASR）；
 //      可选 ASR_REGION、ASR_HOTWORD_ID（热词表ID，提升字母识别率）。
 
-function matchLetter(text) {
-  if (!text) return null;
+// 将 ASR 文本解析为一个或多个字母。
+// 做法：先用长度>=2 的"字母名"做词边界匹配（按长度降序，避免短词抢长词，
+// 并用 \b 防止 "ex" 误伤 "expert"、'el' 误伤 "letter"）；再对剩余孤立单字母兜底。
+// 返回数组，支持一次识别命中多个字母。
+function matchLetters(text) {
+  if (!text) return [];
   const { SPEECH_MAP } = require('../config/gameConfig');
-  const t = String(text).toLowerCase().trim();
-  if (SPEECH_MAP[t]) return SPEECH_MAP[t];
-  // 包含匹配（识别结果可能带标点或多词，如 "bee" / "letter b"）
-  for (const key in SPEECH_MAP) {
-    if (t.indexOf(key) !== -1) return SPEECH_MAP[key];
+  const lower = String(text).toLowerCase();
+  const out = [];
+  const keys = Object.keys(SPEECH_MAP)
+    .filter((k) => k.length >= 2)
+    .sort((a, b) => b.length - a.length);
+  let working = lower;
+  for (const key of keys) {
+    const pattern = key.indexOf(' ') !== -1 ? key : '\\b' + key + '\\b';
+    const re = new RegExp(pattern, 'g');
+    let m;
+    while ((m = re.exec(working)) !== null) {
+      out.push(SPEECH_MAP[key]);
+      const start = m.index;
+      const end = start + m[0].length;
+      // 用空格覆盖命中区间，避免重叠/重复匹配
+      working = working.slice(0, start) + ' '.repeat(end - start) + working.slice(end);
+      re.lastIndex = 0;
+    }
   }
-  // 直接是单个字母（A-Z）
-  if (/^[a-z]$/.test(t)) return t.toUpperCase();
-  return null;
+  // 剩余文本中的孤立单字母（A-Z）
+  const remainder = working.split(/[^a-z]+/).filter(Boolean);
+  for (const tok of remainder) {
+    if (/^[a-z]$/.test(tok)) out.push(tok.toUpperCase());
+  }
+  return out;
+}
+
+// 兼容旧调用：只取第一个字母
+function matchLetter(text) {
+  const arr = matchLetters(text);
+  return arr.length ? arr[0] : null;
 }
 
 // 确保录音权限已授权：未决定则请求（首次弹系统窗），已拒绝则引导去设置
@@ -101,8 +127,11 @@ function createSpeechManager(onResult, onError) {
           console.log('[speech] asr 返回:', JSON.stringify(result));
           const text = result && result.text;
           if (text) {
-            const letter = matchLetter(text);
-            if (letter && typeof onResult === 'function') onResult(letter);
+            const letters = matchLetters(text);
+            console.log('[speech] 解析字母 =', JSON.stringify(letters));
+            for (const letter of letters) {
+              if (typeof onResult === 'function') onResult(letter);
+            }
           }
         }).catch((err) => {
           console.error('[speech] callFunction asr 失败', err);
