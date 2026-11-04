@@ -2,6 +2,20 @@
 const { LETTERS, speedForLevel, levelForScore, BASE_LEVEL } = require('../../config/gameConfig');
 const { createSpeechManager } = require('../../utils/speech');
 
+// 字母徽标配色（彩色，增加可读性，像"图标方块"）
+const LETTER_COLORS = ['#ff7a18', '#ff5252', '#42a5f5', '#66bb6a', '#ab47bc', '#ffca28', '#26c6da', '#ec407a'];
+
+// 绘制圆角矩形路径（兼容各基础库，不依赖 ctx.roundRect）
+function roundRectPath(ctx, x, y, w, h, r) {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.arcTo(x + w, y, x + w, y + h, r);
+  ctx.arcTo(x + w, y + h, x, y + h, r);
+  ctx.arcTo(x, y + h, x, y, r);
+  ctx.arcTo(x, y, x + w, y, r);
+  ctx.closePath();
+}
+
 Page({
   data: {
     started: false,
@@ -105,9 +119,10 @@ Page({
     const upper = LETTERS[Math.floor(Math.random() * LETTERS.length)];
     // 大小写随机显示（与安卓版一致），读音匹配按字母名、不受大小写影响
     const display = Math.random() < 0.5 ? upper : upper.toLowerCase();
-    const size = 46;
-    const x = Math.random() * (this.cw - size) + size / 2;
-    this.letters.push({ char: upper, display, x, y: -size, size });
+    const size = 34; // 徽标半边长（实际边长 = 2*size）
+    const x = Math.random() * (this.cw - size * 2) + size;
+    const color = LETTER_COLORS[Math.floor(Math.random() * LETTER_COLORS.length)];
+    this.letters.push({ char: upper, display, x, y: -size * 2, size, color });
   },
 
   update(dt) {
@@ -117,7 +132,7 @@ Page({
     }
     const remaining = [];
     for (const l of this.letters) {
-      if (l.y - l.size / 2 > this.ch) {
+      if (l.y + l.size > this.ch) {
         this.loseLife(); // 落地 = 失败
       } else {
         remaining.push(l);
@@ -129,11 +144,26 @@ Page({
   draw() {
     const ctx = this.ctx;
     ctx.clearRect(0, 0, this.cw, this.ch);
-    ctx.font = 'bold 46px sans-serif';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     for (const l of this.letters) {
-      ctx.fillStyle = '#ff7a18';
+      const s = l.size;
+      const x = l.x - s;
+      const y = l.y - s;
+      const w = s * 2;
+      const r = Math.min(14, s); // 圆角半径
+      // 背景色圆角徽标（像图标方块）
+      ctx.fillStyle = l.color || '#ff7a18';
+      roundRectPath(ctx, x, y, w, w, r);
+      ctx.fill();
+      // 白色描边，提升层次感
+      ctx.lineWidth = 3;
+      ctx.strokeStyle = 'rgba(255,255,255,0.85)';
+      roundRectPath(ctx, x, y, w, w, r);
+      ctx.stroke();
+      // 字母（白字，加粗）
+      ctx.fillStyle = '#ffffff';
+      ctx.font = 'bold ' + Math.round(s * 1.05) + 'px sans-serif';
       ctx.fillText(l.display, l.x, l.y);
     }
   },
