@@ -22,10 +22,44 @@ function matchLetter(text) {
   return null;
 }
 
+// 确保录音权限已授权：未决定则请求（首次弹系统窗），已拒绝则引导去设置
+function ensureRecordAuth(onOk, onFail) {
+  if (typeof wx === 'undefined' || !wx.getSetting) { onOk(); return; }
+  wx.getSetting({
+    success(res) {
+      const auth = res.authSetting['scope.record'];
+      if (auth === false) {
+        // 之前拒绝过 -> 引导去设置（系统不会再次弹窗）
+        if (wx.showModal) {
+          wx.showModal({
+            title: '需要麦克风权限',
+            content: '念字母消除需要麦克风。请在设置中开启"录音"权限，或直接在屏幕上点字母消除。',
+            confirmText: '去设置',
+            cancelText: '用点击',
+            success(m) { if (m.confirm && wx.openSetting) wx.openSetting(); }
+          });
+        }
+        if (typeof onFail === 'function') onFail();
+      } else if (auth === true) {
+        onOk();
+      } else {
+        // 尚未决定 -> 请求授权（首次会弹系统窗）
+        wx.authorize({
+          scope: 'scope.record',
+          success: onOk,
+          fail: () => { if (typeof onFail === 'function') onFail(); }
+        });
+      }
+    },
+    fail() { onOk(); } // 取不到设置就直接尝试，由系统弹窗兜底
+  });
+}
+
 function createSpeechManager(onResult, onError) {
   // 无云环境 -> 降级点击模式
   const hasCloud = typeof wx !== 'undefined' && wx.cloud && typeof wx.cloud.callFunction === 'function';
   if (!hasCloud) {
+    console.log('[speech] 无云环境，降级 tap 模式');
     return { mode: 'tap', start() {}, stop() {} };
   }
 
@@ -36,6 +70,7 @@ function createSpeechManager(onResult, onError) {
   const startRecording = () => {
     if (!active) return;
     try {
+      console.log('[speech] recorder.start 开始录音');
       recorder.start({
         duration: 1300,        // 每段短录音，循环实现"持续聆听"
         sampleRate: 16000,
@@ -44,42 +79,53 @@ function createSpeechManager(onResult, onError) {
         format: 'wav'
       });
     } catch (e) {
+      console.error('[speech] recorder.start 异常', e);
       if (typeof onError === 'function') onError(e);
     }
   };
 
   const sendChunk = (tempFilePath) => {
     if (!active || !tempFilePath) return;
+    console.log('[speech] onStop 录音结束，读取文件', tempFilePath);
     wx.getFileSystemManager().readFile({
       filePath: tempFilePath,
       encoding: 'base64',
       success: (res) => {
         if (!active) return;
+        console.log('[speech] 调用云函数 asr, base64 长度 =', (res.data || '').length);
         wx.cloud.callFunction({
           name: 'asr',
           data: { audioBase64: res.data }
         }).then((r) => {
-          const text = r && r.result && r.result.text;
+          const result = r && r.result;
+          console.log('[speech] asr 返回:', JSON.stringify(result));
+          const text = result && result.text;
           if (text) {
             const letter = matchLetter(text);
             if (letter && typeof onResult === 'function') onResult(letter);
           }
         }).catch((err) => {
+          console.error('[speech] callFunction asr 失败', err);
           if (typeof onError === 'function') onError(err);
         });
       },
-      fail: (err) => { if (typeof onError === 'function') onError(err); }
+      fail: (err) => { console.error('[speech] 读取录音文件失败', err); if (typeof onError === 'function') onError(err); }
     });
   };
 
   if (!bound) {
     bound = true;
+    recorder.onStart(() => {
+      console.log('[speech] onStart 录音已启动');
+    });
     recorder.onStop((res) => {
       if (!active) return;
       sendChunk(res.tempFilePath);
-      startRecording(); // 持续聆听：立即开始下一段
+      // 短暂停顿再开下一段，避免与上一会话抢资源
+      setTimeout(() => startRecording(), 30);
     });
     recorder.onError((err) => {
+      console.error('[speech] recorder.onError', JSON.stringify(err));
       if (typeof onError === 'function') onError(err);
     });
   }
@@ -88,7 +134,10 @@ function createSpeechManager(onResult, onError) {
     mode: 'voice',
     start() {
       active = true;
-      startRecording();
+      ensureRecordAuth(
+        () => startRecording(),
+        () => { /* 授权失败：保持 tap 兜底，由 onError 提示 */ }
+      );
     },
     stop() {
       active = false;

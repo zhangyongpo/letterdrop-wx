@@ -14,6 +14,9 @@
     <block wx:else>点击下落的字母即可消除</block>
   </view>
 
+  <!-- 语音状态提示（授权/错误），非空时显示 -->
+  <view class="voice-status" wx:if="{{voiceStatus}}">{{voiceStatus}}</view>
+
   <!-- 结束卡片 -->
   <view class="overlay" wx:if="{{gameOver}}">
     <view class="card">

@@ -25,7 +25,8 @@ Page({
     level: BASE_LEVEL,
     best: 0,
     scoreBump: false,
-    mode: 'tap' // 'voice' | 'tap'
+    mode: 'tap', // 'voice' | 'tap'
+    voiceStatus: '' // 语音相关提示（授权/错误），非空时上屏
   },
 
   onLoad() {
@@ -40,7 +41,7 @@ Page({
     this.initCanvas(() => {
       this.speech = createSpeechManager(
         (letter) => this.onSpeechLetter(letter),
-        () => {}
+        (err) => this.onSpeechError(err)
       );
       this.setData({ mode: this.speech.mode });
       this.startGame();
@@ -170,6 +171,7 @@ Page({
 
   // 语音识别到字母 -> 消除最下方匹配字母
   onSpeechLetter(letter) {
+    if (this.data.voiceStatus) this.setData({ voiceStatus: '' });
     let target = null;
     for (const l of this.letters) {
       if (l.char.toUpperCase() === String(letter).toUpperCase()) {
@@ -180,6 +182,18 @@ Page({
       this.letters = this.letters.filter((x) => x !== target);
       this.bumpScore();
     }
+  },
+
+  // 语音/录音错误上屏（麦克风授权被拒、识别接口异常等）
+  onSpeechError(err) {
+    const msg = (err && (err.errMsg || err.message)) || '未知错误';
+    let hint;
+    if (/auth|record|permission|麦克风/i.test(String(msg))) {
+      hint = '麦克风权限未授权，可直接点字母消除';
+    } else {
+      hint = '语音暂不可用：' + msg;
+    }
+    this.setData({ voiceStatus: hint });
   },
 
   // 点击消除（语音模式下也保留为兜底/辅助）

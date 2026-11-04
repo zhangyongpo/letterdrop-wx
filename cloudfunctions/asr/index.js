@@ -15,6 +15,7 @@ const AsrClient =
 
 exports.main = async (event) => {
   const audioBase64 = event && event.audioBase64;
+  console.log('[asr] 调用, audioBase64 长度 =', (audioBase64 || '').length);
   if (!audioBase64) {
     return { text: '' };
   }
@@ -43,8 +44,10 @@ exports.main = async (event) => {
     });
     // 兼容不同 SDK 版本的返回结构
     const text = (resp && (resp.Result || (resp.Response && resp.Response.Result))) || '';
+    console.log('[asr] 识别结果 =', text);
     return { text };
   } catch (e) {
+    console.error('[asr] 识别异常', e && e.message ? e.message : e);
     return { text: '', error: e && e.message ? e.message : String(e) };
   }
 };
