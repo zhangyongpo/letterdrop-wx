@@ -34,6 +34,8 @@ Page({
     this.lastSpawn = 0;
     this.lastTime = 0;
     this.running = false;
+    this.pending = null;       // 语音待消除缓冲（容忍识别延迟）
+    this.pendingUntil = 0;
   },
 
   onReady() {
@@ -93,6 +95,8 @@ Page({
     this.running = true;
     this.lastTime = Date.now();
     this.lastSpawn = 0;
+    this.pending = null;
+    this.pendingUntil = 0;
     if (this.speech) this.speech.start();
     this.loop();
   },
@@ -123,7 +127,15 @@ Page({
     const size = 34; // 徽标半边长（实际边长 = 2*size）
     const x = Math.random() * (this.cw - size * 2) + size;
     const color = LETTER_COLORS[Math.floor(Math.random() * LETTER_COLORS.length)];
-    this.letters.push({ char: upper, display, x, y: -size * 2, size, color });
+    const newL = { char: upper, display, x, y: -size * 2, size, color };
+    this.letters.push(newL);
+    // 语音待消除：刚生成的字母正好是要消的目标 -> 立即清除（容忍识别延迟）
+    if (this.pending && newL.char.toUpperCase() === this.pending && Date.now() < this.pendingUntil) {
+      this.letters = this.letters.filter((x) => x !== newL);
+      this.pending = null;
+      this.bumpScore();
+      console.log('[game] 待消除命中（出现即消）:', newL.char);
+    }
   },
 
   update(dt) {
@@ -169,18 +181,26 @@ Page({
     }
   },
 
-  // 语音识别到字母 -> 消除最下方匹配字母
+  // 语音识别到字母 -> 消除最下方匹配字母（无匹配则进入待消除缓冲，容忍识别延迟）
   onSpeechLetter(letter) {
     if (this.data.voiceStatus) this.setData({ voiceStatus: '' });
+    const up = String(letter).toUpperCase();
+    console.log('[game] 语音收到:', up, '| 当前屏幕字母:', this.letters.map((l) => l.char).join(','));
     let target = null;
     for (const l of this.letters) {
-      if (l.char.toUpperCase() === String(letter).toUpperCase()) {
+      if (l.char.toUpperCase() === up) {
         if (!target || l.y > target.y) target = l;
       }
     }
     if (target) {
       this.letters = this.letters.filter((x) => x !== target);
       this.bumpScore();
+      console.log('[game] 即时消除:', up);
+    } else {
+      // 屏幕上暂无该字母（多半是识别延迟导致它已落地），先记下，出现即消
+      this.pending = up;
+      this.pendingUntil = Date.now() + 2500;
+      console.log('[game] 屏幕无匹配，设为待消除:', up);
     }
   },
 
