@@ -2,17 +2,11 @@
 <view class="game">
   <canvas type="2d" id="gameCanvas" class="canvas" bindtap="onTapCanvas"></canvas>
 
-  <!-- HUD：顶部目标字母（醒目）+ 得分 / 生命 / 速度档 -->
+  <!-- HUD：顶部仅显示得分 -->
   <view class="hud" wx:if="{{started && !gameOver}}">
-    <view class="target">请找出
-      <text class="target-letter">{{target}}</text>
-    </view>
     <view class="hud-row">
       <view class="hud-score {{scoreBump ? 'bump' : ''}}">得分 {{score}}</view>
-      <view class="hud-lives">生命 {{lives}}</view>
-      <view class="hud-level">第 {{level}} 档</view>
     </view>
-    <view class="hud-group">第 {{groupNo}} 组</view>
   </view>
 
   <!-- 结束卡片 -->

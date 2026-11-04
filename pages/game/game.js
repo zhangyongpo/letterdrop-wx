@@ -126,7 +126,7 @@ Page({
 
     const size = 34;                 // 徽标半边长
     const colW = this.cw / COLS;
-    const rowGap = size * 5;         // 两排之间的纵向间距（形成明显两排）
+    const rowGap = size * 2.5;       // 两排之间的纵向间距（已按要求调小到约一半）
 
     const letters = [];
     const pushLetter = (idx, char) => {

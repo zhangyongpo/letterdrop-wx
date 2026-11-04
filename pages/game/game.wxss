@@ -24,25 +24,6 @@
   pointer-events: none;
 }
 
-.target {
-  font-size: 40rpx;
-  color: #5a2d00;
-  font-weight: 600;
-}
-
-.target-letter {
-  display: inline-block;
-  margin-left: 12rpx;
-  font-size: 88rpx;
-  font-weight: 900;
-  color: #ff7a18;
-  text-shadow: 0 3rpx 0 #fff;
-  background: rgba(255, 255, 255, 0.55);
-  border-radius: 20rpx;
-  padding: 0 26rpx;
-  line-height: 1.2;
-}
-
 .hud-row {
   margin-top: 16rpx;
   display: flex;
@@ -56,7 +37,6 @@
   color: #ff7a18;
   text-shadow: 0 2rpx 0 #fff;
   transform: scale(1);
-  margin-right: 28rpx;
 }
 
 .hud-score.bump {
@@ -67,18 +47,6 @@
   0% { transform: scale(1); }
   50% { transform: scale(1.35); }
   100% { transform: scale(1); }
-}
-
-.hud-lives, .hud-level {
-  font-size: 30rpx;
-  color: #8a5a2b;
-  margin-left: 20rpx;
-}
-
-.hud-group {
-  margin-top: 8rpx;
-  font-size: 26rpx;
-  color: #b06a2b;
 }
 
 /* 结束卡片 */
