@@ -24,12 +24,39 @@
   pointer-events: none;
 }
 
+.target {
+  font-size: 40rpx;
+  color: #5a2d00;
+  font-weight: 600;
+}
+
+.target-letter {
+  display: inline-block;
+  margin-left: 12rpx;
+  font-size: 88rpx;
+  font-weight: 900;
+  color: #ff7a18;
+  text-shadow: 0 3rpx 0 #fff;
+  background: rgba(255, 255, 255, 0.55);
+  border-radius: 20rpx;
+  padding: 0 26rpx;
+  line-height: 1.2;
+}
+
+.hud-row {
+  margin-top: 16rpx;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
 .hud-score {
-  font-size: 64rpx;
+  font-size: 52rpx;
   font-weight: 800;
   color: #ff7a18;
   text-shadow: 0 2rpx 0 #fff;
   transform: scale(1);
+  margin-right: 28rpx;
 }
 
 .hud-score.bump {
@@ -42,18 +69,14 @@
   100% { transform: scale(1); }
 }
 
-.hud-meta {
-  margin-top: 8rpx;
-  font-size: 28rpx;
+.hud-lives, .hud-level {
+  font-size: 30rpx;
   color: #8a5a2b;
+  margin-left: 20rpx;
 }
 
-.tip {
-  position: absolute;
-  bottom: 40rpx;
-  left: 0;
-  right: 0;
-  text-align: center;
+.hud-group {
+  margin-top: 8rpx;
   font-size: 26rpx;
   color: #b06a2b;
 }
@@ -110,19 +133,4 @@
 .card .btn-primary {
   margin-top: 48rpx;
   width: 320rpx;
-}
-
-/* 语音状态提示（授权/错误） */
-.voice-status {
-  position: absolute;
-  top: 140rpx;
-  left: 0;
-  right: 0;
-  text-align: center;
-  font-size: 26rpx;
-  color: #c0392b;
-  background: rgba(255, 255, 255, 0.7);
-  margin: 0 40rpx;
-  padding: 12rpx 0;
-  border-radius: 16rpx;
 }

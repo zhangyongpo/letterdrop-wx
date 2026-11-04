@@ -1,8 +1,11 @@
-// pages/game/game.js —— 游戏核心逻辑
-const { LETTERS, speedForLevel, levelForScore, BASE_LEVEL } = require('../../config/gameConfig');
-const { createSpeechManager } = require('../../utils/speech');
+// pages/game/game.js —— 反向玩法：App 报字母，玩家点击掉落字母
+const {
+  LETTERS, GROUP_SIZE, COLS, MAX_TARGET_COUNT, GROUPS_PER_LEVEL,
+  MAX_LIVES, CORRECT_SCORE, WRONG_PENALTY, speedForLevel
+} = require('../../config/gameConfig');
+const { speakLetter } = require('../../utils/audio');
 
-// 字母徽标配色（彩色，增加可读性，像"图标方块"）
+// 字母徽标配色（彩色，增加可读性，像“图标方块”）
 const LETTER_COLORS = ['#ff7a18', '#ff5252', '#42a5f5', '#66bb6a', '#ab47bc', '#ffca28', '#26c6da', '#ec407a'];
 
 // 绘制圆角矩形路径（兼容各基础库，不依赖 ctx.roundRect）
@@ -16,45 +19,52 @@ function roundRectPath(ctx, x, y, w, h, r) {
   ctx.closePath();
 }
 
+// 返回打乱后的数组副本
+function shuffled(arr) {
+  const a = arr.slice();
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a;
+}
+
 Page({
   data: {
     started: false,
     gameOver: false,
     score: 0,
-    lives: 3,
-    level: BASE_LEVEL,
+    lives: MAX_LIVES,
+    level: 1,        // 速度档（由已完成组数推导）
     best: 0,
     scoreBump: false,
-    mode: 'tap', // 'voice' | 'tap'
-    voiceStatus: '' // 语音相关提示（授权/错误），非空时上屏
+    target: '',      // 当前要找的字母（大写）
+    groupNo: 0       // 已开始的组序号
   },
 
   onLoad() {
     this.letters = [];
-    this.lastSpawn = 0;
-    this.lastTime = 0;
     this.running = false;
-    this.pending = null;       // 语音待消除缓冲（容忍识别延迟）
-    this.pendingUntil = 0;
+    this.lastTime = 0;
+    this.groupLevel = 1;
+    this.groupsPlayed = 0;
+    this.target = '';
+    this.foundThisGroup = 0;
+    this.totalTargetsThisGroup = 0;
+    this.groupActive = false;
+    this._groupTimer = null;
+    this._bumpTimer = null;
   },
 
   onReady() {
-    // 画布就绪后再创建语音并自动开始游戏（避免空白）
-    this.initCanvas(() => {
-      this.speech = createSpeechManager(
-        (letter) => this.onSpeechLetter(letter),
-        (err) => this.onSpeechError(err)
-      );
-      this.setData({ mode: this.speech.mode });
-      this.startGame();
-    });
+    // 画布就绪后再自动开始（避免空白）
+    this.initCanvas(() => this.startGame());
   },
 
   initCanvas(cb) {
     const query = wx.createSelectorQuery();
     query.select('#gameCanvas').fields({ node: true, size: true }).exec((res) => {
       if (!res || !res[0] || !res[0].node) {
-        // 画布尚未布局完成，稍后重试
         setTimeout(() => this.initCanvas(cb), 100);
         return;
       }
@@ -62,7 +72,6 @@ Page({
       const ctx = canvas.getContext('2d');
       const info = (wx.getWindowInfo ? wx.getWindowInfo() : wx.getSystemInfoSync());
       const dpr = info.pixelRatio || 2;
-      // 取渲染尺寸，若为 0 则回退到窗口尺寸，避免画布尺寸为 0 导致空白
       const w = res[0].width || info.windowWidth || 320;
       const h = res[0].height || info.windowHeight || 568;
       canvas.width = w * dpr;
@@ -77,28 +86,74 @@ Page({
   },
 
   startGame() {
-    // 确保画布已就绪
     if (!this.canvas) {
       this.initCanvas();
       setTimeout(() => this.startGame(), 60);
       return;
     }
+    if (this._groupTimer) clearTimeout(this._groupTimer);
     this.setData({
-      started: true,
-      gameOver: false,
-      score: 0,
-      lives: 3,
-      level: BASE_LEVEL,
-      scoreBump: false
+      started: true, gameOver: false, score: 0,
+      lives: MAX_LIVES, level: 1, scoreBump: false, target: '', groupNo: 0
     });
     this.letters = [];
     this.running = true;
+    this.groupLevel = 1;
+    this.groupsPlayed = 0;
     this.lastTime = Date.now();
-    this.lastSpawn = 0;
-    this.pending = null;
-    this.pendingUntil = 0;
-    if (this.speech) this.speech.start();
+    this.startGroup();
     this.loop();
+  },
+
+  // 开始一组：生成 6 个字母（3列 × 2排），含 1~2 个目标字母，播报目标读音
+  startGroup() {
+    this.groupsPlayed += 1;
+    this.groupLevel = 1 + Math.floor((this.groupsPlayed - 1) / GROUPS_PER_LEVEL);
+
+    const target = LETTERS[Math.floor(Math.random() * LETTERS.length)];
+    this.target = target;
+
+    // 目标出现次数：1 或 2（最多 2 个）
+    const targetCount = Math.random() < 0.5 ? 1 : 2;
+
+    // 6 个槽位，随机挑选 targetCount 个放目标，其余放干扰项
+    const slots = shuffled([0, 1, 2, 3, 4, 5]);
+    const targetSlots = slots.slice(0, targetCount);
+    const distractorSlots = slots.slice(targetCount);
+
+    // 干扰项：与目标不同、且彼此不同
+    const others = shuffled(LETTERS.filter((l) => l !== target));
+
+    const size = 34;                 // 徽标半边长
+    const colW = this.cw / COLS;
+    const rowGap = size * 5;         // 两排之间的纵向间距（形成明显两排）
+
+    const letters = [];
+    const pushLetter = (idx, char) => {
+      const col = idx % COLS;
+      const row = Math.floor(idx / COLS);
+      const x = colW * (col + 0.5);
+      const y = -size * 2 - row * rowGap;
+      const display = Math.random() < 0.5 ? char : char.toLowerCase(); // 大小写随机，不区分大小写
+      letters.push({
+        char,
+        display,
+        x, y, size,
+        color: LETTER_COLORS[idx % LETTER_COLORS.length]
+      });
+    };
+
+    targetSlots.forEach((idx) => pushLetter(idx, target));
+    distractorSlots.forEach((idx, k) => pushLetter(idx, others[k]));
+
+    this.letters = letters;
+    this.foundThisGroup = 0;
+    this.totalTargetsThisGroup = targetCount;
+    this.groupActive = true;
+
+    this.setData({ target, level: this.groupLevel, groupNo: this.groupsPlayed });
+    speakLetter(target); // 开局播报目标字母
+    console.log('[game] 第', this.groupsPlayed, '组 目标=', target, ' 目标数=', targetCount);
   },
 
   loop() {
@@ -106,52 +161,40 @@ Page({
     const now = Date.now();
     const dt = Math.min(now - this.lastTime, 50); // 防止后台切回时巨跳
     this.lastTime = now;
-
-    // 按速度档动态生成间隔（越快越密）
-    this.lastSpawn += dt;
-    const interval = Math.max(450, 1400 - (this.data.level - BASE_LEVEL) * 80);
-    if (this.lastSpawn > interval) {
-      this.spawnLetter();
-      this.lastSpawn = 0;
-    }
-
     this.update(dt);
     this.draw();
     this.canvas.requestAnimationFrame(() => this.loop());
   },
 
-  spawnLetter() {
-    const upper = LETTERS[Math.floor(Math.random() * LETTERS.length)];
-    // 大小写随机显示（与安卓版一致），读音匹配按字母名、不受大小写影响
-    const display = Math.random() < 0.5 ? upper : upper.toLowerCase();
-    const size = 34; // 徽标半边长（实际边长 = 2*size）
-    const x = Math.random() * (this.cw - size * 2) + size;
-    const color = LETTER_COLORS[Math.floor(Math.random() * LETTER_COLORS.length)];
-    const newL = { char: upper, display, x, y: -size * 2, size, color };
-    this.letters.push(newL);
-    // 语音待消除：刚生成的字母正好是要消的目标 -> 立即清除（容忍识别延迟）
-    if (this.pending && newL.char.toUpperCase() === this.pending && Date.now() < this.pendingUntil) {
-      this.letters = this.letters.filter((x) => x !== newL);
-      this.pending = null;
-      this.bumpScore();
-      console.log('[game] 待消除命中（出现即消）:', newL.char);
-    }
-  },
-
   update(dt) {
-    const speed = speedForLevel(this.data.level); // 逻辑像素/毫秒
+    if (!this.groupActive) return;
+    const speed = speedForLevel(this.groupLevel);
+    const remaining = [];
+    let missedTarget = false;
+
     for (const l of this.letters) {
       l.y += speed * dt;
-    }
-    const remaining = [];
-    for (const l of this.letters) {
       if (l.y + l.size > this.ch) {
-        this.loseLife(); // 落地 = 失败
+        // 落地
+        if (l.char.toUpperCase() === this.target) {
+          missedTarget = true; // 漏掉目标字母 -> 扣命
+        }
+        // 干扰项落地不扣分
       } else {
         remaining.push(l);
       }
     }
     this.letters = remaining;
+
+    if (missedTarget) this.loseLife();
+
+    // 本组字母全部清空 -> 进入下一组
+    if (this.groupActive && this.letters.length === 0) {
+      this.groupActive = false;
+      this._groupTimer = setTimeout(() => {
+        if (this.running) this.startGroup();
+      }, 450);
+    }
   },
 
   draw() {
@@ -164,85 +207,66 @@ Page({
       const x = l.x - s;
       const y = l.y - s;
       const w = s * 2;
-      const r = Math.min(14, s); // 圆角半径
-      // 背景色圆角徽标（像图标方块）
+      const r = Math.min(14, s);
       ctx.fillStyle = l.color || '#ff7a18';
       roundRectPath(ctx, x, y, w, w, r);
       ctx.fill();
-      // 白色描边，提升层次感
       ctx.lineWidth = 3;
       ctx.strokeStyle = 'rgba(255,255,255,0.85)';
       roundRectPath(ctx, x, y, w, w, r);
       ctx.stroke();
-      // 字母（白字，加粗）
       ctx.fillStyle = '#ffffff';
       ctx.font = 'bold ' + Math.round(s * 1.05) + 'px sans-serif';
       ctx.fillText(l.display, l.x, l.y);
     }
   },
 
-  // 语音识别到字母 -> 消除最下方匹配字母（无匹配则进入待消除缓冲，容忍识别延迟）
-  onSpeechLetter(letter) {
-    if (this.data.voiceStatus) this.setData({ voiceStatus: '' });
-    const up = String(letter).toUpperCase();
-    console.log('[game] 语音收到:', up, '| 当前屏幕字母:', this.letters.map((l) => l.char).join(','));
-    let target = null;
-    for (const l of this.letters) {
-      if (l.char.toUpperCase() === up) {
-        if (!target || l.y > target.y) target = l;
-      }
-    }
-    if (target) {
-      this.letters = this.letters.filter((x) => x !== target);
-      this.bumpScore();
-      console.log('[game] 即时消除:', up);
-    } else {
-      // 屏幕上暂无该字母（多半是识别延迟导致它已落地），先记下，出现即消
-      this.pending = up;
-      this.pendingUntil = Date.now() + 2500;
-      console.log('[game] 屏幕无匹配，设为待消除:', up);
-    }
-  },
-
-  // 语音/录音错误上屏（麦克风授权被拒、识别接口异常等）
-  onSpeechError(err) {
-    const msg = (err && (err.errMsg || err.message)) || '未知错误';
-    let hint;
-    if (/auth|record|permission|麦克风/i.test(String(msg))) {
-      hint = '麦克风权限未授权，可直接点字母消除';
-    } else {
-      hint = '语音暂不可用：' + msg;
-    }
-    this.setData({ voiceStatus: hint });
-  },
-
-  // 点击消除（语音模式下也保留为兜底/辅助）
+  // 点击：命中字母则判定对错
   onTapCanvas(e) {
-    if (!this.running) return;
+    if (!this.running || !this.groupActive) return;
     const x = e.detail.x;
     const y = e.detail.y;
     for (let i = this.letters.length - 1; i >= 0; i--) {
       const l = this.letters[i];
       if (Math.abs(l.x - x) < l.size && Math.abs(l.y - y) < l.size) {
-        this.letters.splice(i, 1);
-        this.bumpScore();
+        if (l.char.toUpperCase() === this.target) {
+          // 点中正确字母
+          this.letters.splice(i, 1);
+          this.foundThisGroup += 1;
+          this.bumpScore(CORRECT_SCORE);
+          // 本组目标全部找到 -> 立即清场进入下一组
+          if (this.foundThisGroup >= this.totalTargetsThisGroup) {
+            this.letters = [];
+            this.groupActive = false;
+            this._groupTimer = setTimeout(() => {
+              if (this.running) this.startGroup();
+            }, 300);
+          }
+        } else {
+          // 点错（点到干扰项）-> 扣分并移除
+          this.letters.splice(i, 1);
+          this.penalize(WRONG_PENALTY);
+        }
         break;
       }
     }
   },
 
-  bumpScore() {
-    const score = this.data.score + 1;
-    const level = levelForScore(score);
-    this.setData({ score, level, scoreBump: true });
+  bumpScore(n) {
+    const score = this.data.score + n;
+    this.setData({ score, scoreBump: true });
     if (this._bumpTimer) clearTimeout(this._bumpTimer);
     this._bumpTimer = setTimeout(() => this.setData({ scoreBump: false }), 250);
-
     const best = wx.getStorageSync('letterdrop_best') || 0;
     if (score > best) {
       wx.setStorageSync('letterdrop_best', score);
       this.setData({ best: score });
     }
+  },
+
+  penalize(n) {
+    const score = Math.max(0, this.data.score - n); // 扣分，不低于 0
+    this.setData({ score });
   },
 
   loseLife() {
@@ -253,7 +277,7 @@ Page({
 
   endGame() {
     this.running = false;
-    if (this.speech && this.speech.mode === 'voice') this.speech.stop();
+    if (this._groupTimer) clearTimeout(this._groupTimer);
     const best = Math.max(wx.getStorageSync('letterdrop_best') || 0, this.data.score);
     wx.setStorageSync('letterdrop_best', best);
     this.setData({ gameOver: true, best, started: true });
@@ -265,6 +289,6 @@ Page({
 
   onUnload() {
     this.running = false;
-    if (this.speech && this.speech.mode === 'voice') this.speech.stop();
+    if (this._groupTimer) clearTimeout(this._groupTimer);
   }
 });

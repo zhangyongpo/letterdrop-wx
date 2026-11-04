@@ -1,21 +1,19 @@
-<!-- pages/game/game.wxml —— 游戏页：Canvas 掉落 + HUD + 结束卡片 -->
+<!-- pages/game/game.wxml —— 反向玩法：App 报字母，玩家点击掉落字母 -->
 <view class="game">
   <canvas type="2d" id="gameCanvas" class="canvas" bindtap="onTapCanvas"></canvas>
 
-  <!-- HUD：顶部得分（醒目）+ 生命/速度档 -->
+  <!-- HUD：顶部目标字母（醒目）+ 得分 / 生命 / 速度档 -->
   <view class="hud" wx:if="{{started && !gameOver}}">
-    <view class="hud-score {{scoreBump ? 'bump' : ''}}">得分 {{score}}</view>
-    <view class="hud-meta">生命 {{lives}} · 速度档 {{level}}</view>
+    <view class="target">请找出
+      <text class="target-letter">{{target}}</text>
+    </view>
+    <view class="hud-row">
+      <view class="hud-score {{scoreBump ? 'bump' : ''}}">得分 {{score}}</view>
+      <view class="hud-lives">生命 {{lives}}</view>
+      <view class="hud-level">第 {{level}} 档</view>
+    </view>
+    <view class="hud-group">第 {{groupNo}} 组</view>
   </view>
-
-  <!-- 模式提示 -->
-  <view class="tip" wx:if="{{started && !gameOver}}">
-    <block wx:if="{{mode === 'voice'}}">念出字母读音，或在落地前点击字母消除</block>
-    <block wx:else>点击下落的字母即可消除</block>
-  </view>
-
-  <!-- 语音状态提示（授权/错误），非空时显示 -->
-  <view class="voice-status" wx:if="{{voiceStatus}}">{{voiceStatus}}</view>
 
   <!-- 结束卡片 -->
   <view class="overlay" wx:if="{{gameOver}}">
