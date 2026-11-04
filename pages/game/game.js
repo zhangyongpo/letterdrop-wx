@@ -22,29 +22,40 @@ Page({
   },
 
   onReady() {
-    this.initCanvas();
-    this.speech = createSpeechManager(
-      (letter) => this.onSpeechLetter(letter),
-      () => {}
-    );
-    this.setData({ mode: this.speech.mode });
+    // 画布就绪后再创建语音并自动开始游戏（避免空白）
+    this.initCanvas(() => {
+      this.speech = createSpeechManager(
+        (letter) => this.onSpeechLetter(letter),
+        () => {}
+      );
+      this.setData({ mode: this.speech.mode });
+      this.startGame();
+    });
   },
 
-  initCanvas() {
+  initCanvas(cb) {
     const query = wx.createSelectorQuery();
     query.select('#gameCanvas').fields({ node: true, size: true }).exec((res) => {
-      if (!res || !res[0]) return;
+      if (!res || !res[0] || !res[0].node) {
+        // 画布尚未布局完成，稍后重试
+        setTimeout(() => this.initCanvas(cb), 100);
+        return;
+      }
       const canvas = res[0].node;
       const ctx = canvas.getContext('2d');
       const info = (wx.getWindowInfo ? wx.getWindowInfo() : wx.getSystemInfoSync());
       const dpr = info.pixelRatio || 2;
-      canvas.width = res[0].width * dpr;
-      canvas.height = res[0].height * dpr;
+      // 取渲染尺寸，若为 0 则回退到窗口尺寸，避免画布尺寸为 0 导致空白
+      const w = res[0].width || info.windowWidth || 320;
+      const h = res[0].height || info.windowHeight || 568;
+      canvas.width = w * dpr;
+      canvas.height = h * dpr;
       ctx.scale(dpr, dpr);
       this.canvas = canvas;
       this.ctx = ctx;
-      this.cw = res[0].width;
-      this.ch = res[0].height;
+      this.cw = w;
+      this.ch = h;
+      if (typeof cb === 'function') cb();
     });
   },
 
