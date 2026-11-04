@@ -91,10 +91,12 @@ Page({
   },
 
   spawnLetter() {
-    const char = LETTERS[Math.floor(Math.random() * LETTERS.length)];
+    const upper = LETTERS[Math.floor(Math.random() * LETTERS.length)];
+    // 大小写随机显示（与安卓版一致），读音匹配按字母名、不受大小写影响
+    const display = Math.random() < 0.5 ? upper : upper.toLowerCase();
     const size = 46;
     const x = Math.random() * (this.cw - size) + size / 2;
-    this.letters.push({ char, x, y: -size, size });
+    this.letters.push({ char: upper, display, x, y: -size, size });
   },
 
   update(dt) {
@@ -121,7 +123,7 @@ Page({
     ctx.textBaseline = 'middle';
     for (const l of this.letters) {
       ctx.fillStyle = '#ff7a18';
-      ctx.fillText(l.char, l.x, l.y);
+      ctx.fillText(l.display, l.x, l.y);
     }
   },
 

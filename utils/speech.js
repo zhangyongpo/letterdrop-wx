@@ -1,13 +1,13 @@
 // utils/speech.js
-// 语音识别接口：优先使用微信「同声传译」插件（WechatSI），不可用时降级为"点击消除"模式。
-// 对应安卓版 Vosk 离线识别 + 点字模式降级。
+// 语音识别接口：使用腾讯官方「微信同声传译」插件（WechatSI，provider wx069ba97219f66d99），
+// 对应安卓版 Vosk 离线识别的"念字母读音消除"能力；不可用时降级为"点击消除"模式。
 //
-// 接入真·语音识别的步骤：
-//   1. 在微信公众平台 -> 设置 -> 第三方设置 -> 插件，添加「微信同声传译」插件；
-//   2. 在 app.json 的 "plugins" 中声明 WechatSI（骨架未声明，便于游客模式预览）；
-//   3. 本文件会自动 requirePlugin 并启用 voice 模式。
-//
-// 若不接入插件，游戏自动进入 tap 模式：直接点击下落的字母即可消除（用于开发调试）。
+// 启用语音识别的前提（一次性的后台配置）：
+//   1. 登录 mp.weixin.qq.com，进入你的小程序（appid: wxe988a5f8708ecad3）；
+//   2. 设置 -> 第三方设置 -> 插件 -> 添加「微信同声传译」；
+//   3. app.json 已声明 WechatSI 插件（见 plugins 字段）；
+//   4. 未在后台添加插件前，开发者工具会因插件未授权而无法编译，
+//      此时可临时删除 app.json 的 "plugins" 块，先用 tap 模式验证玩法。
 
 function matchLetter(text) {
   if (!text) return null;
@@ -31,6 +31,7 @@ function createSpeechManager(onResult, onError) {
 
   if (plugin && typeof plugin.getRecordRecognitionManager === 'function') {
     const manager = plugin.getRecordRecognitionManager();
+    let active = false;
     manager.onRecognize = (res) => {
       const letter = matchLetter(res && res.result);
       if (letter && typeof onResult === 'function') onResult(letter);
@@ -38,16 +39,24 @@ function createSpeechManager(onResult, onError) {
     manager.onError = (err) => {
       if (typeof onError === 'function') onError(err);
     };
+    // 到时长上限自动停止后，若仍在游戏中则立即重新开始，实现"持续聆听"
+    manager.onStop = () => {
+      if (active) {
+        try { manager.start({ lang: 'en_US', duration: 60000 }); } catch (e) { /* ignore */ }
+      }
+    };
     return {
       mode: 'voice',
       start() {
+        active = true;
         try {
-          manager.start({ lang: 'en_US', duration: 10000 });
+          manager.start({ lang: 'en_US', duration: 60000 });
         } catch (e) {
           if (typeof onError === 'function') onError(e);
         }
       },
       stop() {
+        active = false;
         try { manager.stop(); } catch (e) { /* ignore */ }
       }
     };
