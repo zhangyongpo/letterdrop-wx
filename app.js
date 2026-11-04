@@ -8,10 +8,9 @@ App({
     this.globalData.bestScore = best;
 
     // 初始化云开发（语音识别走云函数）
-    // TODO: 把 'YOUR_CLOUD_ENV_ID' 替换为你自己的云开发环境 ID
     if (typeof wx !== 'undefined' && wx.cloud) {
       wx.cloud.init({
-        env: 'YOUR_CLOUD_ENV_ID',
+        env: 'cloud1-d0gnprjtba84fda2f',
         traceUser: true
       });
     }

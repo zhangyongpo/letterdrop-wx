@@ -37,7 +37,7 @@ letterdrop-wx/
 
 ### 一次性配置
 1. **开通云开发**：微信开发者工具 → 顶部"云开发" → 开通，创建环境，复制**环境 ID**；
-2. 把环境 ID 填进 `app.js` 的 `wx.cloud.init({ env: 'YOUR_CLOUD_ENV_ID' })`（替换占位符）；
+2. 把环境 ID 填进 `app.js` 的 `wx.cloud.init({ env: 'cloud1-d0gnprjtba84fda2f' })`；
 3. **开通腾讯云 ASR**：登录 https://console.cloud.tencent.com/asr ，实名后开通「语音识别」，在 **访问管理 → API 密钥** 拿到 `SecretId` / `SecretKey`；
 4. **部署云函数**：右键 `cloudfunctions/asr` → 上传并部署：**云端安装依赖**；
 5. **配置环境变量**：云开发控制台 → 云函数 `asr` → 配置 → 环境变量，添加：
