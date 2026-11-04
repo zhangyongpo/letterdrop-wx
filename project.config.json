@@ -33,6 +33,7 @@
   "libVersion": "3.0.0",
   "appid": "wxe988a5f8708ecad3",
   "projectname": "letterdrop-wx",
+  "cloudfunctionRoot": "cloudfunctions/",
   "condition": {},
   "simulatorPluginLibVersion": {},
   "editorSetting": {}

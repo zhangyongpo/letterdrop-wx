@@ -92,7 +92,7 @@ Page({
     this.running = true;
     this.lastTime = Date.now();
     this.lastSpawn = 0;
-    if (this.speech && this.speech.mode === 'voice') this.speech.start();
+    if (this.speech) this.speech.start();
     this.loop();
   },
 
@@ -182,9 +182,8 @@ Page({
     }
   },
 
-  // 降级：点击消除
+  // 点击消除（语音模式下也保留为兜底/辅助）
   onTapCanvas(e) {
-    if (this.speech && this.speech.mode !== 'tap') return;
     if (!this.running) return;
     const x = e.detail.x;
     const y = e.detail.y;

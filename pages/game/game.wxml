@@ -8,9 +8,10 @@
     <view class="hud-meta">生命 {{lives}} · 速度档 {{level}}</view>
   </view>
 
-  <!-- 降级模式提示 -->
-  <view class="tip" wx:if="{{mode === 'tap' && started && !gameOver}}">
-    点击下落的字母即可消除（当前未接入语音识别）
+  <!-- 模式提示 -->
+  <view class="tip" wx:if="{{started && !gameOver}}">
+    <block wx:if="{{mode === 'voice'}}">念出字母读音，或在落地前点击字母消除</block>
+    <block wx:else>点击下落的字母即可消除</block>
   </view>
 
   <!-- 结束卡片 -->

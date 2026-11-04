@@ -1,0 +1,9 @@
+{
+  "name": "asr",
+  "version": "1.0.0",
+  "description": "腾讯云一句话识别云函数（字母掉落小游戏念字母识别）",
+  "main": "index.js",
+  "dependencies": {
+    "tencentcloud-sdk-nodejs-asr": "latest"
+  }
+}
