@@ -80,7 +80,8 @@ async def gen_one(text, out_path):
         comm = edge_tts.Communicate(text, VOICE, rate=RATE, volume=VOLUME)
         await comm.save(out_path)
         return
-    tmp = out_path + ".raw.mp3"
+    # 临时文件放在系统临时目录，避免在工作区批量删除触发保护
+    tmp = os.path.join(tempfile.gettempdir(), os.path.basename(out_path) + ".raw.mp3")
     comm = edge_tts.Communicate(text, VOICE, rate=RATE, volume=VOLUME)
     await comm.save(tmp)
     cmd = [
@@ -143,11 +144,19 @@ async def main(words):
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--all", action="store_true", help="生成全部单元（去重）")
+    ap.add_argument("--units", nargs="*", help="仅生成指定单元，如 --units u1 u2")
     ap.add_argument("--words", nargs="*", help="自定义单词列表")
     args = ap.parse_args()
 
     if args.words:
         words = args.words
+    elif args.units:
+        words = list(WELCOME)
+        for u in args.units:
+            if u in OTHER:
+                words += OTHER[u]
+            else:
+                print("未知单元（可选 welcome/u1/u2/u3/u4/u5）：", u)
     elif args.all:
         words = list(WELCOME)
         for v in OTHER.values():

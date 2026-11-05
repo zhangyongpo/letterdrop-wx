@@ -1,0 +1,5 @@
+# 第三方 TTS 生成时的中间临时文件
+*.raw.mp3
+
+# 依赖
+node_modules/

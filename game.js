@@ -20,6 +20,10 @@ const { BOOK } = require('./data/words');
 // “拼单词”模式章节列表：各单元 + “全部章节”
 const SPELL_CHAPTERS = BOOK.chapters.concat(BOOK.all);
 
+// 已开放（已配真实发音）的章节；未列入的章节在章节选择页置灰并提示“即将到来”。
+// 新增单元开放时，在此数组追加对应 id（并生成其单词发音）即可。
+const SPELL_OPEN = ['welcome', 'u1', 'u2'];
+
 // 字母徽标配色（彩色圆角方块，白字）
 const LETTER_COLORS = ['#ff7a18', '#ff5252', '#42a5f5', '#66bb6a', '#ab47bc', '#ffca28', '#26c6da', '#ec407a'];
 
@@ -231,8 +235,19 @@ function startSpellChapter(chapterId) {
   const ch = SPELL_CHAPTERS.find((c) => c.id === chapterId);
   if (!ch) return;
   spellChapterName = ch.name;
+  let words;
+  if (chapterId === 'all') {
+    // “全部章节”仅合并已开放单元的单词（未开放单元置灰不可进入，避免混入无发音词）
+    words = [];
+    SPELL_OPEN.forEach((id) => {
+      const c = BOOK.chapters.find((x) => x.id === id);
+      if (c) words.push(...c.words);
+    });
+  } else {
+    words = ch.words;
+  }
   // 过滤掉含空格的短语（不适合逐字母拼写），再打乱顺序
-  spellList = shuffled(ch.words.filter((w) => !/\s/.test(w.en)));
+  spellList = shuffled(words.filter((w) => !/\s/.test(w.en)));
   spellIndex = 0;
   loadSpellWord(0);
   state = 'spell';
@@ -798,11 +813,23 @@ function drawChapter() {
   SPELL_CHAPTERS.forEach((ch, i) => {
     const y = startY + i * (rowH + gap) - chapterScrollY;
     const rect = { x: 20, y, w: W - 40, h: rowH };
-    chapterCards.push({ rect, id: ch.id });
+    // 已开放章节可点击进入；“全部章节”始终可用（仅含已开放单元单词），其余单元置灰
+    const enabled = (ch.id === 'all') ? true : (SPELL_OPEN.indexOf(ch.id) >= 0);
+    chapterCards.push({ rect, id: ch.id, enabled });
     // 仅绘制落在可视区域内的卡片
     if (y + rowH >= listTop - 4 && y <= listBottom + 4) {
-      const count = ch.words.filter((w) => !/\s/.test(w.en)).length;
-      drawMenuCard(rect, ch.name, count + ' 个单词', true, uniTitleSize);
+      let count;
+      if (ch.id === 'all') {
+        // “全部章节”只统计已开放单元的单词，与 startSpellChapter 保持一致
+        count = 0;
+        SPELL_OPEN.forEach((id) => {
+          const c = BOOK.chapters.find((x) => x.id === id);
+          if (c) count += c.words.filter((w) => !/\s/.test(w.en)).length;
+        });
+      } else {
+        count = ch.words.filter((w) => !/\s/.test(w.en)).length;
+      }
+      drawMenuCard(rect, ch.name, count + ' 个单词', enabled, uniTitleSize);
     }
   });
 }
@@ -1029,7 +1056,10 @@ wx.onTouchStart((e) => {
   } else if (state === 'chapter') {
     if (hit(backBtn, px, py)) { state = 'grade'; return; }
     for (const item of chapterCards) {
-      if (hit(item.rect, px, py)) { startSpellChapter(item.id); return; }
+      if (hit(item.rect, px, py)) {
+        if (item.enabled) startSpellChapter(item.id); // 未开放章节（置灰）点击不进入
+        return;
+      }
     }
   } else if (state === 'home') {
     if (hit(backBtn, px, py)) { state = 'nav'; return; }
