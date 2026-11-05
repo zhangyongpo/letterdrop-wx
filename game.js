@@ -409,7 +409,7 @@ function drawButton(rect, label) {
   ctx.fillStyle = '#ffffff';
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
-  ctx.font = 'bold 40px sans-serif';
+  ctx.font = 'bold 32px sans-serif';
   ctx.fillText(label, rect.x + rect.w / 2, rect.y + rect.h / 2);
 }
 
@@ -442,7 +442,7 @@ function drawHome() {
   drawBackButton(backBtn);
 
   // 标题：字号随屏宽自适应，并保证不超出屏宽（避免两侧被截）
-  let titleSize = Math.min(88, W * 0.22);
+  let titleSize = Math.min(52, W * 0.13);
   ctx.font = 'bold ' + titleSize + 'px sans-serif';
   let tW = ctx.measureText('字母掉落').width;
   if (tW > W * 0.92) titleSize = Math.floor(titleSize * (W * 0.92) / tW);
@@ -452,7 +452,7 @@ function drawHome() {
 
   // 副标题：超长时自动缩小以适配屏宽（实测写死 30px 在窄屏会左右截断）
   const subtitle = '听发音，在字母落地前点中它！';
-  let subSize = Math.min(30, W * 0.08);
+  let subSize = Math.min(24, W * 0.06);
   ctx.font = subSize + 'px sans-serif';
   let sW = ctx.measureText(subtitle).width;
   const maxSubW = W * 0.9;
@@ -463,12 +463,12 @@ function drawHome() {
 
   // 开始按钮：宽度随屏宽自适应，左右各留边
   const btnW = Math.min(320, W - 80);
-  startBtn = { x: W / 2 - btnW / 2, y: H * 0.55, w: btnW, h: 92 };
+  startBtn = { x: W / 2 - btnW / 2, y: H * 0.55, w: btnW, h: 80 };
   drawButton(startBtn, '开始游戏');
 
   // 最高分：超长自动缩小
   const bestText = '最高分：' + best;
-  let bestSize = 30;
+  let bestSize = 24;
   ctx.font = bestSize + 'px sans-serif';
   let bW = ctx.measureText(bestText).width;
   if (bW > W * 0.9) bestSize = Math.floor(bestSize * (W * 0.9) / bW);
@@ -486,7 +486,7 @@ function drawNav() {
   ctx.textBaseline = 'middle';
 
   // 标题：随屏宽自适应
-  let titleSize = Math.min(80, W * 0.2);
+  let titleSize = Math.min(60, W * 0.15);
   ctx.font = 'bold ' + titleSize + 'px sans-serif';
   let tW = ctx.measureText('字母拼拼').width;
   if (tW > W * 0.92) titleSize = Math.floor(titleSize * (W * 0.92) / tW);
@@ -496,7 +496,7 @@ function drawNav() {
 
   // 副标题
   const sub = '选择一个模式开始吧';
-  let subSize = Math.min(26, W * 0.07);
+  let subSize = Math.min(22, W * 0.055);
   ctx.font = subSize + 'px sans-serif';
   let sW = ctx.measureText(sub).width;
   if (sW > W * 0.9) subSize = Math.floor(subSize * (W * 0.9) / sW);
@@ -532,14 +532,14 @@ function drawMenuCard(rect, title, sub, enabled) {
   ctx.textAlign = 'left';
   ctx.textBaseline = 'middle';
   ctx.fillStyle = '#ffffff';
-  ctx.font = 'bold 44px sans-serif';
+  ctx.font = 'bold 34px sans-serif';
   // 标题过长时自动缩小字号，避免超出卡片（右侧需给箭头/标签留位）
   let tw = ctx.measureText(title).width;
   const maxTW = rect.w - 92;
-  if (tw > maxTW) ctx.font = 'bold ' + Math.floor(44 * maxTW / tw) + 'px sans-serif';
+  if (tw > maxTW) ctx.font = 'bold ' + Math.floor(34 * maxTW / tw) + 'px sans-serif';
   ctx.fillText(title, rect.x + 32, rect.y + rect.h / 2 - 16);
 
-  let subSize = Math.min(24, rect.w * 0.06);
+  let subSize = Math.min(20, rect.w * 0.05);
   ctx.font = subSize + 'px sans-serif';
   ctx.fillStyle = 'rgba(255,255,255,0.92)';
   ctx.fillText(sub, rect.x + 32, rect.y + rect.h / 2 + 22);
@@ -547,13 +547,13 @@ function drawMenuCard(rect, title, sub, enabled) {
   if (enabled) {
     ctx.textAlign = 'right';
     ctx.fillStyle = 'rgba(255,255,255,0.9)';
-    ctx.font = '40px sans-serif';
+    ctx.font = '32px sans-serif';
     ctx.fillText('›', rect.x + rect.w - 28, rect.y + rect.h / 2);
   } else {
     const tag = '即将到来';
-    ctx.font = '22px sans-serif';
+    ctx.font = '20px sans-serif';
     const tw = ctx.measureText(tag).width + 24;
-    const th = 36;
+    const th = 32;
     const tx = rect.x + rect.w - tw - 18;
     const ty = rect.y + rect.h / 2 - th / 2;
     ctx.fillStyle = 'rgba(120,120,120,0.9)';
@@ -596,7 +596,7 @@ function drawPlaying() {
   ctx.fillStyle = '#c0392b';
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
-  ctx.font = 'bold 28px sans-serif';
+  ctx.font = 'bold 24px sans-serif';
   ctx.fillText('退出', exitBtn.x + exitBtn.w / 2, exitBtn.y + exitBtn.h / 2 + 1);
 }
 
@@ -616,11 +616,11 @@ function drawExitConfirm() {
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
   ctx.fillStyle = '#5a2d00';
-  ctx.font = 'bold 38px sans-serif';
+  ctx.font = 'bold 32px sans-serif';
   ctx.fillText('退出当前游戏？', W / 2, cardY + 56);
 
   ctx.fillStyle = '#8a5a2b';
-  ctx.font = '28px sans-serif';
+  ctx.font = '24px sans-serif';
   ctx.fillText('当前得分 ' + score, W / 2, cardY + 104);
 
   const btnW = (cardW - 60) / 2;
@@ -632,7 +632,7 @@ function drawExitConfirm() {
   roundRectPath(ctx, exitCancelBtn.x, exitCancelBtn.y, exitCancelBtn.w, exitCancelBtn.h, 16);
   ctx.fill();
   ctx.fillStyle = '#555555';
-  ctx.font = 'bold 30px sans-serif';
+  ctx.font = 'bold 26px sans-serif';
   ctx.fillText('继续', exitCancelBtn.x + btnW / 2, exitCancelBtn.y + btnH / 2);
 
   // 确定退出（确认）
@@ -641,7 +641,7 @@ function drawExitConfirm() {
   roundRectPath(ctx, exitConfirmBtn.x, exitConfirmBtn.y, exitConfirmBtn.w, exitConfirmBtn.h, 16);
   ctx.fill();
   ctx.fillStyle = '#ffffff';
-  ctx.font = 'bold 30px sans-serif';
+  ctx.font = 'bold 26px sans-serif';
   ctx.fillText('退出', exitConfirmBtn.x + btnW / 2, exitConfirmBtn.y + btnH / 2);
 }
 
@@ -657,7 +657,7 @@ function drawGameOver() {
   ctx.textBaseline = 'middle';
 
   // 标题：字号随屏宽自适应，保证不超出屏宽
-  let overTitleSize = Math.min(56, W * 0.15);
+  let overTitleSize = Math.min(48, W * 0.13);
   ctx.font = 'bold ' + overTitleSize + 'px sans-serif';
   let otW = ctx.measureText('游戏结束').width;
   if (otW > W * 0.92) overTitleSize = Math.floor(overTitleSize * (W * 0.92) / otW);
@@ -666,14 +666,14 @@ function drawGameOver() {
   ctx.fillText('游戏结束', W / 2, H * 0.3);
 
   ctx.fillStyle = '#ff7a18';
-  ctx.font = 'bold 44px sans-serif';
+  ctx.font = 'bold 36px sans-serif';
   ctx.fillText('本局得分 ' + score, W / 2, H * 0.42);
 
   ctx.fillStyle = '#8a5a2b';
-  ctx.font = '32px sans-serif';
+  ctx.font = '28px sans-serif';
   ctx.fillText('最高分 ' + best, W / 2, H * 0.5);
 
-  restartBtn = { x: W / 2 - 160, y: H * 0.62, w: 320, h: 92 };
+  restartBtn = { x: W / 2 - 160, y: H * 0.62, w: 320, h: 80 };
   drawButton(restartBtn, '再来一局');
 
   // 左上角返回按钮：回到模式选择导航页
@@ -722,13 +722,13 @@ function drawGrade() {
   backBtn = { x: 14, y: 14, w: 52, h: 40 };
   drawBackButton(backBtn);
 
-  let titleSize = Math.min(64, W * 0.16);
+  let titleSize = Math.min(52, W * 0.13);
   ctx.font = 'bold ' + titleSize + 'px sans-serif';
   ctx.fillStyle = '#5a2d00';
   ctx.fillText('选择年级', W / 2, H * 0.16);
 
   ctx.fillStyle = '#8a5a2b';
-  ctx.font = (Math.min(26, W * 0.07)) + 'px sans-serif';
+  ctx.font = (Math.min(22, W * 0.055)) + 'px sans-serif';
   ctx.fillText('Join In 英语 · 三年级上册', W / 2, H * 0.24);
 
   const cardW = Math.min(360, W - 80);
@@ -749,13 +749,13 @@ function drawChapter() {
   backBtn = { x: 14, y: 14, w: 52, h: 40 };
   drawBackButton(backBtn);
 
-  let titleSize = Math.min(64, W * 0.16);
+  let titleSize = Math.min(52, W * 0.13);
   ctx.font = 'bold ' + titleSize + 'px sans-serif';
   ctx.fillStyle = '#5a2d00';
   ctx.fillText(BOOK.title, W / 2, H * 0.10);
 
   ctx.fillStyle = '#8a5a2b';
-  ctx.font = (Math.min(24, W * 0.06)) + 'px sans-serif';
+  ctx.font = (Math.min(20, W * 0.05)) + 'px sans-serif';
   ctx.fillText('选择章节开始练习', W / 2, H * 0.17);
 
   const startY = Math.round(H * 0.22);
@@ -919,15 +919,15 @@ function drawSpellDialog() {
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
   ctx.fillStyle = '#2e7d32';
-  ctx.font = 'bold 38px sans-serif';
+  ctx.font = 'bold 32px sans-serif';
   ctx.fillText('拼对啦！', W / 2, cardY + 50);
 
   ctx.fillStyle = '#5a2d00';
-  ctx.font = 'bold 56px sans-serif';
+  ctx.font = 'bold 46px sans-serif';
   ctx.fillText(spellWord, W / 2, cardY + 116);
 
   ctx.fillStyle = '#8a5a2b';
-  ctx.font = '30px sans-serif';
+  ctx.font = '26px sans-serif';
   ctx.fillText(spellMeaning, W / 2, cardY + 174);
 
   const btnW = cardW - 80;
@@ -938,7 +938,7 @@ function drawSpellDialog() {
   roundRectPath(ctx, spellNextBtn.x, spellNextBtn.y, spellNextBtn.w, spellNextBtn.h, 18);
   ctx.fill();
   ctx.fillStyle = '#ffffff';
-  ctx.font = 'bold 32px sans-serif';
+  ctx.font = 'bold 28px sans-serif';
   ctx.fillText('下一个', spellNextBtn.x + btnW / 2, spellNextBtn.y + btnH / 2);
 }
 
