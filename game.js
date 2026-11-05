@@ -795,12 +795,16 @@ function drawSpell() {
   ctx.font = (Math.min(20, W * 0.055)) + 'px sans-serif';
   ctx.fillText('第 ' + (spellIndex + 1) + ' / ' + spellList.length + ' 个', W / 2, 86);
 
-  // 输入框（白底圆角 + 阴影感）
+  // 输入框：英文书写“四线三格”样式（像英语字帖），每个字母占一格，帮助记忆字母占位
   const boxW = Math.min(360, W - 60);
-  const boxH = 88;
+  const lineGap = 22;            // 相邻横线间距
+  const pad = 14;                // 卡片内边距
+  const boxH = lineGap * 3 + pad * 2;
   const boxX = W / 2 - boxW / 2;
   const boxY = 110;
-  ctx.fillStyle = 'rgba(255,255,255,0.95)';
+
+  // 白底圆角卡片
+  ctx.fillStyle = 'rgba(255,255,255,0.97)';
   roundRectPath(ctx, boxX, boxY, boxW, boxH, 20);
   ctx.fill();
   ctx.lineWidth = 2;
@@ -808,16 +812,54 @@ function drawSpell() {
   roundRectPath(ctx, boxX, boxY, boxW, boxH, 20);
   ctx.stroke();
 
+  // 四线三格的四条横线（中格两条线稍淡，像英语本）
+  const lineY = [];
+  for (let k = 0; k < 4; k++) lineY.push(boxY + pad + k * lineGap);
+  const innerL = boxX + 8, innerR = boxX + boxW - 8;
+  for (let k = 0; k < 4; k++) {
+    ctx.beginPath();
+    ctx.moveTo(innerL, lineY[k]);
+    ctx.lineTo(innerR, lineY[k]);
+    ctx.lineWidth = (k === 1 || k === 2) ? 1 : 1.5;
+    ctx.strokeStyle = (k === 1 || k === 2) ? 'rgba(90,150,210,0.35)' : 'rgba(90,150,210,0.6)';
+    ctx.stroke();
+  }
+
   const input = spellOrder.map((i) => spellCandidates[i].ch).join('');
+  const Ncells = Math.max(spellWord.length, input.length, 1);
+  const slotW = (innerR - innerL) / Ncells;
+  // 每格之间的淡竖线，帮孩子定位每个字母的位置
+  ctx.strokeStyle = 'rgba(90,150,210,0.28)';
+  ctx.lineWidth = 1;
+  for (let c = 1; c < Ncells; c++) {
+    const vx = innerL + c * slotW;
+    ctx.beginPath();
+    ctx.moveTo(vx, lineY[0]);
+    ctx.lineTo(vx, lineY[3]);
+    ctx.stroke();
+  }
+
   if (input.length === 0) {
     ctx.fillStyle = '#bbbbbb';
-    ctx.font = (Math.min(24, boxW * 0.06)) + 'px sans-serif';
-    ctx.fillText('点击下方字母，拼出听到的单词', W / 2, boxY + boxH / 2);
+    ctx.font = (Math.min(20, boxW * 0.05)) + 'px sans-serif';
+    ctx.fillText('点击下方字母，拼出听到的单词', W / 2, (lineY[1] + lineY[2]) / 2);
   } else {
-    ctx.fillStyle = '#5a2d00';
-    let fz = Math.min(48, boxW * 0.11);
-    ctx.font = 'bold ' + fz + 'px sans-serif';
-    ctx.fillText(input, W / 2, boxY + boxH / 2);
+    // 按书写规范把字母落在对应格：上伸字母(bdfhklt)占上中两格，下伸字母(gpqy)占中下两格，其余占中格
+    const ASC = 'bdfhklt';
+    const DESC = 'gpqy';
+    for (let i = 0; i < input.length; i++) {
+      const ch = input[i];
+      let top, bottom;
+      if (ASC.indexOf(ch) >= 0) { top = lineY[0]; bottom = lineY[2]; }
+      else if (DESC.indexOf(ch) >= 0) { top = lineY[1]; bottom = lineY[3]; }
+      else { top = lineY[1]; bottom = lineY[2]; }
+      const cx = innerL + slotW * (i + 0.5);
+      const midY = (top + bottom) / 2;
+      const fz = Math.min(bottom - top + 4, slotW * 0.9);
+      ctx.fillStyle = '#5a2d00';
+      ctx.font = 'bold ' + Math.round(fz) + 'px sans-serif';
+      ctx.fillText(ch, cx, midY);
+    }
   }
 
   // 候选字母网格：复用“找字母”掉落字母的彩色方块样式，每行 5 个，行间距更小
