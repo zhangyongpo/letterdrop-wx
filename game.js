@@ -22,7 +22,7 @@ const SPELL_CHAPTERS = BOOK.chapters.concat(BOOK.all);
 
 // 已开放（已配真实发音）的章节；未列入的章节在章节选择页置灰并提示“即将到来”。
 // 新增单元开放时，在此数组追加对应 id（并生成其单词发音）即可。
-const SPELL_OPEN = ['welcome', 'u1', 'u2'];
+const SPELL_OPEN = ['welcome', 'u1', 'u2', 'u3', 'u4', 'u5'];
 
 // 字母徽标配色（彩色圆角方块，白字）
 const LETTER_COLORS = ['#ff7a18', '#ff5252', '#42a5f5', '#66bb6a', '#ab47bc', '#ffca28', '#26c6da', '#ec407a'];
