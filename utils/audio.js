@@ -30,4 +30,32 @@ function speakLetter(letter) {
   }
 }
 
-module.exports = { speakLetter };
+// 播报两遍：第一遍自然结束后，间隔 gapMs 再播第二遍。
+// 每遍使用独立的临时 InnerAudioContext，避免复用 stop/play 截断上一遍。
+function announceLetter(letter, gapMs) {
+  const up = String(letter).toUpperCase();
+  const gap = typeof gapMs === 'number' ? gapMs : 600;
+  let played = 0;
+  const playOne = () => {
+    try {
+      const c = wx.createInnerAudioContext();
+      c.src = '/assets/audio/' + up + '.mp3';
+      c.obeyMuteSwitch = false;
+      c.onError((res) => {
+        console.log('[audio] 播放失败', up, res && res.errMsg);
+        c.destroy();
+      });
+      c.onEnded(() => {
+        played += 1;
+        c.destroy();
+        if (played < 2) setTimeout(playOne, gap); // 间隔后播第二遍
+      });
+      c.play();
+    } catch (e) {
+      console.log('[audio] announceLetter 异常', e);
+    }
+  };
+  playOne();
+}
+
+module.exports = { speakLetter, announceLetter };

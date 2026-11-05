@@ -1,5 +1,5 @@
 {
-  "description": "字母掉落英语认读小游戏 - 微信小程序版（骨架）",
+  "description": "字母掉落英语认读小游戏 - 微信小游戏（原生 Canvas 2D）",
   "packOptions": {
     "ignore": [],
     "include": []
@@ -29,9 +29,9 @@
       "outputPath": ""
     }
   },
-  "compileType": "miniprogram",
+  "compileType": "game",
   "libVersion": "3.0.0",
-  "appid": "wxe988a5f8708ecad3",
+  "appid": "touristappid",
   "projectname": "letterdrop-wx",
   "condition": {},
   "simulatorPluginLibVersion": {},
