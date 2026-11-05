@@ -519,7 +519,7 @@ function drawNav() {
 }
 
 // 绘制一张菜单卡片（enabled=false 时置灰并显示“即将到来”标签）
-function drawMenuCard(rect, title, sub, enabled) {
+function drawMenuCard(rect, title, sub, enabled, titleSize) {
   const r = 22;
   ctx.fillStyle = enabled ? '#ff7a18' : '#cfcfcf';
   roundRectPath(ctx, rect.x, rect.y, rect.w, rect.h, r);
@@ -529,14 +529,15 @@ function drawMenuCard(rect, title, sub, enabled) {
   roundRectPath(ctx, rect.x, rect.y, rect.w, rect.h, r);
   ctx.stroke();
 
+  if (!titleSize || titleSize < 12) titleSize = 34;  // 未指定时沿用默认
   ctx.textAlign = 'left';
   ctx.textBaseline = 'middle';
   ctx.fillStyle = '#ffffff';
-  ctx.font = 'bold 34px sans-serif';
-  // 标题过长时自动缩小字号，避免超出卡片（右侧需给箭头/标签留位）
+  ctx.font = 'bold ' + titleSize + 'px sans-serif';
+  // 标题过长时仅在统一字号仍放不下时才缩小（避免各卡片字号不一致）
   let tw = ctx.measureText(title).width;
   const maxTW = rect.w - 92;
-  if (tw > maxTW) ctx.font = 'bold ' + Math.floor(34 * maxTW / tw) + 'px sans-serif';
+  if (tw > maxTW) ctx.font = 'bold ' + Math.floor(titleSize * maxTW / tw) + 'px sans-serif';
   ctx.fillText(title, rect.x + 32, rect.y + rect.h / 2 - 16);
 
   let subSize = Math.min(20, rect.w * 0.05);
@@ -769,6 +770,17 @@ function drawChapter() {
   if (chapterScrollY > maxScroll) chapterScrollY = maxScroll;
 
   chapterCards = [];
+  // 先算出能容纳最长单元名的统一标题字号，保证所有单元按钮字号一致（不再各自缩放）
+  const chMaxTW = (W - 40) - 92;
+  let uniTitleSize = 34;
+  SPELL_CHAPTERS.forEach((ch) => {
+    ctx.font = 'bold 34px sans-serif';
+    const w = ctx.measureText(ch.name).width;
+    if (w > chMaxTW) {
+      const s = Math.floor(34 * chMaxTW / w);
+      if (s < uniTitleSize) uniTitleSize = s;
+    }
+  });
   SPELL_CHAPTERS.forEach((ch, i) => {
     const y = startY + i * (rowH + gap) - chapterScrollY;
     const rect = { x: 20, y, w: W - 40, h: rowH };
@@ -776,7 +788,7 @@ function drawChapter() {
     // 仅绘制落在可视区域内的卡片
     if (y + rowH >= listTop - 4 && y <= listBottom + 4) {
       const count = ch.words.filter((w) => !/\s/.test(w.en)).length;
-      drawMenuCard(rect, ch.name, count + ' 个单词', true);
+      drawMenuCard(rect, ch.name, count + ' 个单词', true, uniTitleSize);
     }
   });
 }
