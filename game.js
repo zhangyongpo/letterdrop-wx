@@ -237,7 +237,7 @@ function startSpellChapter(chapterId) {
   spellChapterName = ch.name;
   let words;
   if (chapterId === 'all') {
-    // “全部章节”仅合并已开放单元的单词（未开放单元置灰不可进入，避免混入无发音词）
+    // “全部章节”合并所有已开放单元（welcome/u1-u5）的单词；未开放单元仍置灰不会进来
     words = [];
     SPELL_OPEN.forEach((id) => {
       const c = BOOK.chapters.find((x) => x.id === id);
@@ -813,12 +813,21 @@ function drawChapter() {
   SPELL_CHAPTERS.forEach((ch, i) => {
     const y = startY + i * (rowH + gap) - chapterScrollY;
     const rect = { x: 20, y, w: W - 40, h: rowH };
-    // 仅 SPELL_OPEN 中的已开放章节可点击进入；其余（含“全部章节”）一律置灰提示“即将到来”
-    const enabled = SPELL_OPEN.indexOf(ch.id) >= 0;
+    // 已开放章节（含“全部章节”）可点击进入；“全部章节”合并所有已开放单元单词且已打乱顺序
+    const enabled = (ch.id === 'all') || (SPELL_OPEN.indexOf(ch.id) >= 0);
     chapterCards.push({ rect, id: ch.id, enabled });
     // 仅绘制落在可视区域内的卡片
     if (y + rowH >= listTop - 4 && y <= listBottom + 4) {
-      const count = ch.words.filter((w) => !/\s/.test(w.en)).length;
+      let count;
+      if (ch.id === 'all') {
+        // “全部章节”只统计已开放单元的单词（与 startSpellChapter 实际合并的范围一致）
+        count = SPELL_OPEN.reduce((s, id) => {
+          const c = BOOK.chapters.find((x) => x.id === id);
+          return s + (c ? c.words.filter((w) => !/\s/.test(w.en)).length : 0);
+        }, 0);
+      } else {
+        count = ch.words.filter((w) => !/\s/.test(w.en)).length;
+      }
       drawMenuCard(rect, ch.name, count + ' 个单词', enabled, uniTitleSize);
     }
   });
