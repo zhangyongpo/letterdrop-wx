@@ -795,10 +795,10 @@ function drawSpell() {
   ctx.font = (Math.min(20, W * 0.055)) + 'px sans-serif';
   ctx.fillText('第 ' + (spellIndex + 1) + ' / ' + spellList.length + ' 个', W / 2, 86);
 
-  // 输入框：英文书写“四线三格”样式（像英语字帖），每个字母占一格，帮助记忆字母占位
+  // 输入框：英文书写四线三格（统一字号、字母按书写规范紧凑连续书写，像字帖）
   const boxW = Math.min(360, W - 60);
-  const lineGap = 22;            // 相邻横线间距
-  const pad = 14;                // 卡片内边距
+  const lineGap = 22;            // 相邻横线间距（即中格高度）
+  const pad = 16;
   const boxH = lineGap * 3 + pad * 2;
   const boxX = W / 2 - boxW / 2;
   const boxY = 110;
@@ -815,7 +815,7 @@ function drawSpell() {
   // 四线三格的四条横线（中格两条线稍淡，像英语本）
   const lineY = [];
   for (let k = 0; k < 4; k++) lineY.push(boxY + pad + k * lineGap);
-  const innerL = boxX + 8, innerR = boxX + boxW - 8;
+  const innerL = boxX + 10, innerR = boxX + boxW - 10;
   for (let k = 0; k < 4; k++) {
     ctx.beginPath();
     ctx.moveTo(innerL, lineY[k]);
@@ -826,39 +826,36 @@ function drawSpell() {
   }
 
   const input = spellOrder.map((i) => spellCandidates[i].ch).join('');
-  const Ncells = Math.max(spellWord.length, input.length, 1);
-  const slotW = (innerR - innerL) / Ncells;
-  // 每格之间的淡竖线，帮孩子定位每个字母的位置
-  ctx.strokeStyle = 'rgba(90,150,210,0.28)';
-  ctx.lineWidth = 1;
-  for (let c = 1; c < Ncells; c++) {
-    const vx = innerL + c * slotW;
-    ctx.beginPath();
-    ctx.moveTo(vx, lineY[0]);
-    ctx.lineTo(vx, lineY[3]);
-    ctx.stroke();
-  }
-
   if (input.length === 0) {
     ctx.fillStyle = '#bbbbbb';
     ctx.font = (Math.min(20, boxW * 0.05)) + 'px sans-serif';
     ctx.fillText('点击下方字母，拼出听到的单词', W / 2, (lineY[1] + lineY[2]) / 2);
   } else {
-    // 按书写规范把字母落在对应格：上伸字母(bdfhklt)占上中两格，下伸字母(gpqy)占中下两格，其余占中格
+    // 所有字母统一字号（= 2 个格高，正好填满对应占位的格），按书写规范竖直定位：
+    // 中格字母居中于中格；上伸字母(bdfhklt)占上中两格；下伸字母(gpqy)占中下两格。
+    // 字母用 measureText 紧凑连续书写并整体居中，像正常写单词，不再逐字分大格。
+    const fz = lineGap * 2;
     const ASC = 'bdfhklt';
     const DESC = 'gpqy';
+    const stepGap = fz * 0.12;   // 字母间紧凑步距
+    const adv = [];
+    let totalW = 0;
+    ctx.font = 'bold ' + Math.round(fz) + 'px sans-serif';
+    for (let i = 0; i < input.length; i++) {
+      const w = ctx.measureText(input[i]).width;
+      adv.push(w);
+      totalW += w + (i < input.length - 1 ? stepGap : 0);
+    }
+    let x = W / 2 - totalW / 2;  // 左起光标（字母左边缘）
+    ctx.fillStyle = '#5a2d00';
     for (let i = 0; i < input.length; i++) {
       const ch = input[i];
-      let top, bottom;
-      if (ASC.indexOf(ch) >= 0) { top = lineY[0]; bottom = lineY[2]; }
-      else if (DESC.indexOf(ch) >= 0) { top = lineY[1]; bottom = lineY[3]; }
-      else { top = lineY[1]; bottom = lineY[2]; }
-      const cx = innerL + slotW * (i + 0.5);
-      const midY = (top + bottom) / 2;
-      const fz = Math.min(bottom - top + 4, slotW * 0.9);
-      ctx.fillStyle = '#5a2d00';
-      ctx.font = 'bold ' + Math.round(fz) + 'px sans-serif';
-      ctx.fillText(ch, cx, midY);
+      let midY;
+      if (ASC.indexOf(ch) >= 0) midY = (lineY[0] + lineY[2]) / 2;
+      else if (DESC.indexOf(ch) >= 0) midY = (lineY[1] + lineY[3]) / 2;
+      else midY = (lineY[1] + lineY[2]) / 2;
+      ctx.fillText(ch, x + adv[i] / 2, midY);
+      x += adv[i] + stepGap;
     }
   }
 
