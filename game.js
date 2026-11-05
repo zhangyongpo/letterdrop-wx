@@ -265,20 +265,40 @@ function drawHome() {
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
 
+  // 标题：字号随屏宽自适应，并保证不超出屏宽（避免两侧被截）
+  let titleSize = Math.min(88, W * 0.22);
+  ctx.font = 'bold ' + titleSize + 'px sans-serif';
+  let tW = ctx.measureText('字母掉落').width;
+  if (tW > W * 0.92) titleSize = Math.floor(titleSize * (W * 0.92) / tW);
+  ctx.font = 'bold ' + titleSize + 'px sans-serif';
   ctx.fillStyle = '#5a2d00';
-  ctx.font = 'bold 88px sans-serif';
   ctx.fillText('字母掉落', W / 2, H * 0.28);
 
+  // 副标题：超长时自动缩小以适配屏宽（实测写死 30px 在窄屏会左右截断）
+  const subtitle = '听发音，在字母落地前点中它！';
+  let subSize = Math.min(30, W * 0.08);
+  ctx.font = subSize + 'px sans-serif';
+  let sW = ctx.measureText(subtitle).width;
+  const maxSubW = W * 0.9;
+  if (sW > maxSubW) subSize = Math.floor(subSize * maxSubW / sW);
+  ctx.font = subSize + 'px sans-serif';
   ctx.fillStyle = '#8a5a2b';
-  ctx.font = '30px sans-serif';
-  ctx.fillText('听发音，在字母落地前点中它！', W / 2, H * 0.38);
+  ctx.fillText(subtitle, W / 2, H * 0.38);
 
-  startBtn = { x: W / 2 - 160, y: H * 0.55, w: 320, h: 92 };
+  // 开始按钮：宽度随屏宽自适应，左右各留边
+  const btnW = Math.min(320, W - 80);
+  startBtn = { x: W / 2 - btnW / 2, y: H * 0.55, w: btnW, h: 92 };
   drawButton(startBtn, '开始游戏');
 
+  // 最高分：超长自动缩小
+  const bestText = '最高分：' + best;
+  let bestSize = 30;
+  ctx.font = bestSize + 'px sans-serif';
+  let bW = ctx.measureText(bestText).width;
+  if (bW > W * 0.9) bestSize = Math.floor(bestSize * (W * 0.9) / bW);
+  ctx.font = bestSize + 'px sans-serif';
   ctx.fillStyle = '#b06a2b';
-  ctx.font = '30px sans-serif';
-  ctx.fillText('最高分：' + best, W / 2, H * 0.75);
+  ctx.fillText(bestText, W / 2, H * 0.75);
 }
 
 function drawPlaying() {
@@ -311,8 +331,13 @@ function drawGameOver() {
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
 
+  // 标题：字号随屏宽自适应，保证不超出屏宽
+  let overTitleSize = Math.min(56, W * 0.15);
+  ctx.font = 'bold ' + overTitleSize + 'px sans-serif';
+  let otW = ctx.measureText('游戏结束').width;
+  if (otW > W * 0.92) overTitleSize = Math.floor(overTitleSize * (W * 0.92) / otW);
+  ctx.font = 'bold ' + overTitleSize + 'px sans-serif';
   ctx.fillStyle = '#5a2d00';
-  ctx.font = 'bold 56px sans-serif';
   ctx.fillText('游戏结束', W / 2, H * 0.3);
 
   ctx.fillStyle = '#ff7a18';
