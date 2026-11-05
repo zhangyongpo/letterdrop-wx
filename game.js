@@ -97,39 +97,48 @@ function startGroup() {
   target = LETTERS[Math.floor(Math.random() * LETTERS.length)];
   const targetCount = Math.random() < 0.5 ? 1 : 2;   // 最多 2 个正确答案
 
-  const slots = shuffled([0, 1, 2, 3, 4, 5]);
-  const targetSlots = slots.slice(0, targetCount);
-  const distractorSlots = slots.slice(targetCount);
+  // 构造 6 个“字母身份”互不重复的字母（忽略大小写，即 'A' 与 'a' 视为不同）
+  // 目标字母占 targetCount 个；若为 2 个则明确拆成 大写 + 小写，
+  // 既满足“最多 2 个正确答案（大小写合计）”，又避免屏幕上出现两个一模一样的字母
+  const groupLetters = [];
+  if (targetCount === 2) {
+    groupLetters.push({ char: target, display: target });                  // 大写目标
+    groupLetters.push({ char: target, display: target.toLowerCase() });    // 小写目标
+  } else {
+    const tDisp = Math.random() < 0.5 ? target : target.toLowerCase();
+    groupLetters.push({ char: target, display: tDisp });
+  }
+  // 干扰项：从其余 25 个字母随机取 (6 - targetCount) 个互不相同的，随机大小写
   const others = shuffled(LETTERS.filter((l) => l !== target));
+  for (let k = 0; k < GROUP_SIZE - targetCount; k++) {
+    const c = others[k];
+    groupLetters.push({ char: c, display: Math.random() < 0.5 ? c : c.toLowerCase() });
+  }
 
   const size = 34;                 // 徽标半边长
   const colW = W / COLS;
   const rowGap = size * 2.5;       // 两排之间的纵向间距（已调小到约一半）
 
+  // 打乱这 6 个字母并分配到 3列 × 2排 的位置
   letters = [];
-  const pushLetter = (idx, char) => {
+  shuffled(groupLetters).forEach((g, idx) => {
     const col = idx % COLS;
     const row = Math.floor(idx / COLS);
     const x = colW * (col + 0.5);
     const y = -size * 2 - row * rowGap;
-    const display = Math.random() < 0.5 ? char : char.toLowerCase(); // 大小写随机，不区分大小写
     letters.push({
-      char,
-      display,
+      char: g.char,
+      display: g.display,
       x, y, size,
       row,
       color: LETTER_COLORS[idx % LETTER_COLORS.length]
     });
-  };
-
-  targetSlots.forEach((idx) => pushLetter(idx, target));
-  distractorSlots.forEach((idx, k) => pushLetter(idx, others[k]));
+  });
 
   foundThisGroup = 0;
   totalTargetsThisGroup = targetCount;
   groupActive = true;
   spokenThisGroup = false; // 等第一排完全出现后再播报，避免字母还在屏幕外就念
-  console.log('[game] 第', groupsPlayed, '组 目标=', target, ' 目标数=', targetCount);
 }
 
 function loseLife() {
@@ -169,7 +178,6 @@ function update(dt) {
     if (firstRow.length && firstRow.every((l) => l.y >= l.size)) {
       spokenThisGroup = true;
       announceLetter(target, 600); // 第一遍自然结束后间隔 600ms 再播第二遍
-      console.log('[game] 第', groupsPlayed, '组 第一排已出现，播报目标', target);
     }
   }
 
@@ -325,6 +333,21 @@ function draw() {
   else if (state === 'gameover') drawGameOver();
 }
 
+// 小游戏渲染循环：优先用 canvas.requestAnimationFrame（Canvas 2D 节点方法，官方推荐）
+// 该环境（基础库 3.17.6 / 模拟器）下全局与 wx.requestAnimationFrame 均未注入，故挂在 canvas 上最稳
+function raf(cb) {
+  if (typeof canvas !== 'undefined' && typeof canvas.requestAnimationFrame === 'function') {
+    return canvas.requestAnimationFrame(cb);
+  }
+  if (typeof wx !== 'undefined' && typeof wx.requestAnimationFrame === 'function') {
+    return wx.requestAnimationFrame(cb);
+  }
+  if (typeof requestAnimationFrame === 'function') {
+    return requestAnimationFrame(cb);
+  }
+  return setTimeout(cb, 16); // 兜底：用定时器模拟约 60fps，保证任何环境都能跑
+}
+
 // ---- 主循环 ----
 function loop() {
   const now = Date.now();
@@ -333,15 +356,20 @@ function loop() {
   if (scoreBumpTimer > 0) scoreBumpTimer -= dt;
   update(dt);
   draw();
-  requestAnimationFrame(loop);
+  raf(loop);
 }
 
 // ---- 触摸输入 ----
 wx.onTouchStart((e) => {
-  const t = e.touches && e.touches[0];
+  const t = (e.touches && e.touches[0]) || (e.changedTouches && e.changedTouches[0]);
   if (!t) return;
-  const px = t.clientX;
-  const py = t.clientY;
+  // 不同基础库 touch 坐标字段名不一致：优先 clientX，回退 x / pageX
+  const px = (t.clientX !== undefined) ? t.clientX
+    : (t.x !== undefined) ? t.x
+    : (t.pageX || 0);
+  const py = (t.clientY !== undefined) ? t.clientY
+    : (t.y !== undefined) ? t.y
+    : (t.pageY || 0);
   if (state === 'home') {
     if (hit(startBtn, px, py)) startGame();
   } else if (state === 'gameover') {
@@ -352,4 +380,4 @@ wx.onTouchStart((e) => {
 });
 
 // 启动渲染循环
-requestAnimationFrame(loop);
+raf(loop);
