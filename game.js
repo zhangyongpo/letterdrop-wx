@@ -805,10 +805,10 @@ function drawSpell() {
   spellBackBtn = { x: 14, y: 14, w: 52, h: 40 };
   drawBackButton(spellBackBtn);
 
-  // 顶部：仅保留进度提示（不再显示字母数量）
+  // 顶部：仅保留进度提示（不再显示字母数量），整体下移使画面更居中
   ctx.fillStyle = '#b06a2b';
   ctx.font = (Math.min(20, W * 0.055)) + 'px sans-serif';
-  ctx.fillText('第 ' + (spellIndex + 1) + ' / ' + spellList.length + ' 个', W / 2, 52);
+  ctx.fillText('第 ' + (spellIndex + 1) + ' / ' + spellList.length + ' 个', W / 2, 96);
 
   // 输入框：英文书写四线三格（统一字号、字母按书写规范紧凑连续书写，像字帖）
   const boxW = Math.min(360, W - 60);
@@ -816,7 +816,7 @@ function drawSpell() {
   const pad = 16;
   const boxH = lineGap * 3 + pad * 2;
   const boxX = W / 2 - boxW / 2;
-  const boxY = 110;
+  const boxY = 152;
 
   // 白底圆角卡片
   ctx.fillStyle = 'rgba(255,255,255,0.97)';
