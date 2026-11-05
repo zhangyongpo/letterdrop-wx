@@ -80,7 +80,7 @@ let restartBtn = null;           // 结束页“再来一局”按钮区域
 let navFindBtn = null;           // 导航页“找字母”菜单区域
 let navSpellBtn = null;          // 导航页“拼单词”菜单区域（置灰，即将到来）
 let backBtn = null;              // 返回导航页按钮（主页/结束页左上角）
-let exitBtn = null;              // 游戏中右上角“退出”按钮
+let exitBtn = null;              // 游戏中左上角“退出”按钮
 let exitConfirmBtn = null;       // 退出确认弹框“确定退出”按钮
 let exitCancelBtn = null;        // 退出确认弹框“继续游戏”按钮
 
@@ -435,8 +435,8 @@ function drawPlaying() {
   ctx.fillText('得分 ' + score, 0, 0);
   ctx.restore();
 
-  // 右上角“退出”按钮：游戏中可发起退出（弹框二次确认）
-  exitBtn = { x: W - 104, y: 20, w: 84, h: 44 };
+  // 左上角“退出”按钮：游戏中可发起退出（弹框二次确认）
+  exitBtn = { x: 20, y: 20, w: 84, h: 44 };
   ctx.fillStyle = 'rgba(255,255,255,0.85)';
   roundRectPath(ctx, exitBtn.x, exitBtn.y, exitBtn.w, exitBtn.h, 22);
   ctx.fill();
