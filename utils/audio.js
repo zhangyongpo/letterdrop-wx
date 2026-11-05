@@ -3,6 +3,8 @@
 // 文件位于 /assets/audio/<字母>.wav（绝对包路径，真机可用）。
 // 彻底替代原先的腾讯云 ASR 方案——游戏改为“App 报字母、玩家点击”。
 
+const { WORD_AUDIO } = require('./data/word_audio');
+
 const ctxMap = {};
 
 function getCtx(letter) {
@@ -83,4 +85,28 @@ function announceWord(word, gapMs) {
   playNext();
 }
 
-module.exports = { speakLetter, announceLetter, announceWord };
+// 播放单词真实发音：优先使用 edge-tts 预生成的单词级 mp3（清单 data/word_audio.js 覆盖的词）；
+// 清单未覆盖（如尚未生成发音的单元）时，自动回退为逐字母拼读，保证任何单词都能出声。
+function speakWord(word) {
+  const f = String(word).toLowerCase();
+  if (WORD_AUDIO.indexOf(f) < 0) {
+    announceWord(word);
+    return;
+  }
+  try {
+    const c = wx.createInnerAudioContext();
+    c.src = '/assets/audio/words/' + f + '.mp3';
+    c.obeyMuteSwitch = false;
+    c.onError((res) => {
+      console.log('[audio] 单词发音播放失败，回退拼读', f, res && res.errMsg);
+      c.destroy();
+      announceWord(word);
+    });
+    c.onEnded(() => { c.destroy(); });
+    c.play();
+  } catch (e) {
+    announceWord(word);
+  }
+}
+
+module.exports = { speakLetter, announceLetter, announceWord, speakWord };

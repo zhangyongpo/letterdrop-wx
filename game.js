@@ -7,7 +7,7 @@ const {
   LETTERS, GROUP_SIZE, COLS, MAX_TARGET_COUNT, GROUPS_PER_LEVEL,
   MAX_LIVES, CORRECT_SCORE, WRONG_PENALTY, speedForLevel
 } = require('./config/gameConfig');
-const { announceLetter, announceWord } = require('./utils/audio');
+const { announceLetter, announceWord, speakWord } = require('./utils/audio');
 const { BOOK } = require('./data/words');
 
 // “拼单词”模式章节列表：各单元 + “全部章节”
@@ -229,7 +229,7 @@ function startSpellChapter(chapterId) {
   spellIndex = 0;
   loadSpellWord(0);
   state = 'spell';
-  announceWord(spellWord); // 进入时默认播放一遍（逐字母拼读）
+  speakWord(spellWord); // 进入时默认播放一遍（优先真实发音，回退逐字母拼读）
 }
 
 // 切换到下一个单词；列表结束则返回二级菜单
@@ -258,7 +258,7 @@ function toggleCandidate(idx) {
   const input = spellOrder.map((i) => spellCandidates[i].ch).join('');
   if (input === spellWord) {
     spellSolved = true;
-    announceWord(spellWord); // 拼对后再拼读一遍强化记忆
+    speakWord(spellWord); // 拼对后再播一遍真实发音强化记忆
   }
 }
 
@@ -352,6 +352,40 @@ function drawLetter(l) {
   ctx.textBaseline = 'middle';
   ctx.font = 'bold ' + Math.round(s * 1.05) + 'px sans-serif';
   ctx.fillText(l.display, l.x, l.y);
+}
+
+// 拼单词候选字母方块：复用“找字母”掉落字母的同款视觉
+// （彩色圆角方块 + 白字 + 白色描边），保证两处风格统一。
+function drawSpellTile(x, y, size, ch, selected, idx) {
+  const r = Math.min(14, size / 2);
+  ctx.fillStyle = LETTER_COLORS[idx % LETTER_COLORS.length];
+  roundRectPath(ctx, x, y, size, size, r);
+  ctx.fill();
+  ctx.lineWidth = selected ? 5 : 3;
+  ctx.strokeStyle = selected ? '#5a2d00' : 'rgba(255,255,255,0.85)';
+  roundRectPath(ctx, x, y, size, size, r);
+  ctx.stroke();
+  ctx.fillStyle = '#ffffff';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.font = 'bold ' + Math.round(size * 0.5) + 'px sans-serif';
+  ctx.fillText(ch, x + size / 2, y + size / 2);
+
+  // 选中：右上角绿色对勾徽标
+  if (selected) {
+    const bx = x + size - 4;
+    const by = y + 4;
+    const br = size * 0.18;
+    ctx.fillStyle = '#2e7d32';
+    ctx.beginPath(); ctx.arc(bx, by, br, 0, Math.PI * 2); ctx.fill();
+    ctx.strokeStyle = '#ffffff';
+    ctx.lineWidth = 2.5;
+    ctx.beginPath();
+    ctx.moveTo(bx - br * 0.4, by);
+    ctx.lineTo(bx - br * 0.1, by + br * 0.35);
+    ctx.lineTo(bx + br * 0.45, by - br * 0.4);
+    ctx.stroke();
+  }
 }
 
 function drawButton(rect, label) {
@@ -746,14 +780,14 @@ function drawSpell() {
   spellBackBtn = { x: 20, y: 20, w: 80, h: 48 };
   drawBackButton(spellBackBtn);
 
-  // 顶部章节名 + 进度
-  let headSize = Math.min(30, W * 0.08);
+  // 顶部：仅显示当前单词的字母数量（不再显示章节名）
+  let headSize = Math.min(34, W * 0.09);
   ctx.font = 'bold ' + headSize + 'px sans-serif';
   ctx.fillStyle = '#5a2d00';
-  ctx.fillText(spellChapterName, W / 2, 52);
+  ctx.fillText('字母数量 ' + spellWord.length, W / 2, 52);
   ctx.fillStyle = '#b06a2b';
-  ctx.font = (Math.min(22, W * 0.06)) + 'px sans-serif';
-  ctx.fillText((spellIndex + 1) + ' / ' + spellList.length, W / 2, 86);
+  ctx.font = (Math.min(20, W * 0.055)) + 'px sans-serif';
+  ctx.fillText('第 ' + (spellIndex + 1) + ' / ' + spellList.length + ' 个', W / 2, 86);
 
   // 输入框（白底圆角 + 阴影感）
   const boxW = Math.min(360, W - 60);
@@ -780,53 +814,32 @@ function drawSpell() {
     ctx.fillText(input, W / 2, boxY + boxH / 2);
   }
 
-  // 候选字母网格
+  // 候选字母网格：复用“找字母”掉落字母的彩色方块样式，每行 5 个，行间距更小
+  const sideMargin = 18;
+  const cols = 5;
+  const gap = 12;                          // 方块间距（含行间距），紧凑排布
   const areaTop = boxY + boxH + 26;
-  const areaBottom = H - 130;             // 给底部小喇叭留位
+  const areaBottom = H - 130;              // 给底部小喇叭留位
+  const areaW = W - sideMargin * 2;
+  const cellW = areaW / cols;
+  const maxRows = 6;                       // 以最多 6 行为基准算方块尺寸，长单词也能放下
+  const byH = (areaBottom - areaTop - (maxRows - 1) * gap) / maxRows;
+  let size = Math.min(cellW - gap, byH);
+  if (size > 76) size = 76;                // 上限，避免过大
   const count = spellCandidates.length;
-  const cols = 6;
-  const rows = Math.ceil(count / cols);
-  const cellW = (W - 36) / cols;
-  const cellH = (areaBottom - areaTop) / rows;
-  const size = Math.min(cellW, cellH) - 14;
+  const gridW = cols * cellW;
+  const startX = sideMargin + (areaW - gridW) / 2 + cellW / 2;
+  const startY = areaTop + size / 2 + 4;
   spellTileRects = [];
   spellCandidates.forEach((c, i) => {
     const col = i % cols;
     const row = Math.floor(i / cols);
-    const cx = 18 + cellW * (col + 0.5);
-    const cy = areaTop + cellH * (row + 0.5);
+    const cx = startX + col * cellW;
+    const cy = startY + row * (size + gap);
     const x = cx - size / 2;
     const y = cy - size / 2;
     spellTileRects.push({ x, y, w: size, h: size, idx: i });
-
-    const r = Math.min(14, size * 0.22);
-    ctx.fillStyle = LETTER_COLORS[i % LETTER_COLORS.length];
-    roundRectPath(ctx, x, y, size, size, r);
-    ctx.fill();
-    ctx.lineWidth = c.selected ? 5 : 2;
-    ctx.strokeStyle = c.selected ? '#5a2d00' : 'rgba(255,255,255,0.85)';
-    roundRectPath(ctx, x, y, size, size, r);
-    ctx.stroke();
-
-    ctx.fillStyle = '#ffffff';
-    ctx.font = 'bold ' + Math.round(size * 0.5) + 'px sans-serif';
-    ctx.fillText(c.ch, cx, cy);
-
-    // 选中：右上角绿色对勾徽标
-    if (c.selected) {
-      const bx = x + size - 4;
-      const by = y + 4;
-      const br = size * 0.18;
-      ctx.fillStyle = '#2e7d32';
-      ctx.beginPath(); ctx.arc(bx, by, br, 0, Math.PI * 2); ctx.fill();
-      ctx.strokeStyle = '#ffffff';
-      ctx.lineWidth = 2.5;
-      ctx.beginPath();
-      ctx.moveTo(bx - br * 0.4, by);
-      ctx.lineTo(bx - br * 0.1, by + br * 0.35);
-      ctx.lineTo(bx + br * 0.45, by - br * 0.4);
-      ctx.stroke();
-    }
+    drawSpellTile(x, y, size, c.ch, c.selected, i);
   });
 
   // 底部小喇叭
@@ -972,7 +985,7 @@ wx.onTouchStart((e) => {
       if (hit(spellNextBtn, px, py)) nextSpellWord(); // 答对弹框：下一个
       return;
     }
-    if (hit(spellSpeakerBtn, px, py)) { announceWord(spellWord); return; } // 重听单词
+    if (hit(spellSpeakerBtn, px, py)) { speakWord(spellWord); return; } // 重听单词
     for (const tile of spellTileRects) {
       if (hit(tile, px, py)) { toggleCandidate(tile.idx); return; }
     }
