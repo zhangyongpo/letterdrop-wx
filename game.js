@@ -9,10 +9,11 @@ const {
 } = require('./config/gameConfig');
 const { announceLetter, announceWord, speakWord } = require('./utils/audio');
 
-// 英文手写体（Patrick Hand，OFL 开源可商用），用于拼单词页，更接近英语字帖书写风格。
+// 英文印刷体（Andika，SIL 出品，OFL 开源可商用），专为初学者识字设计，字母形态清晰规范，
+// 小写 a/g 为课本标准双体结构，最贴近小学英语书写印刷体。用于拼单词页。
 // wx.loadFont 在游戏启动时加载一次，Canvas 用返回的字族名即可，加载完成前自动回退 sans-serif。
 const SPELL_FONT = (typeof wx !== 'undefined' && wx.loadFont)
-  ? wx.loadFont('assets/fonts/patrickhand.ttf')
+  ? wx.loadFont('assets/fonts/andika.ttf')
   : null;
 const { BOOK } = require('./data/words');
 
