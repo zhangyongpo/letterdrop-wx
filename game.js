@@ -55,8 +55,10 @@ bgGrad.addColorStop(0, '#fff3e0');
 bgGrad.addColorStop(1, '#ffe0b2');
 
 // ---- 游戏状态 ----
-// state: 'home' | 'playing' | 'gameover'
-let state = 'home';
+// state: 'nav' | 'home' | 'playing' | 'gameover'
+//   nav    —— 模式选择导航页（找字母 / 拼单词）
+//   home   —— 找字母模式主页（原首页，含“开始游戏”按钮）
+let state = 'nav';
 let best = wx.getStorageSync('letterdrop_best') || 0;
 let score = 0;
 let lives = MAX_LIVES;
@@ -73,6 +75,8 @@ let groupTimer = null;
 let scoreBumpTimer = 0;          // 得分 +分 放大动画剩余时间(ms)
 let startBtn = null;             // 首页“开始游戏”按钮区域
 let restartBtn = null;           // 结束页“再来一局”按钮区域
+let navFindBtn = null;           // 导航页“找字母”菜单区域
+let navSpellBtn = null;          // 导航页“拼单词”菜单区域（置灰，即将到来）
 
 // ---- 流程控制 ----
 function startGame() {
@@ -301,6 +305,91 @@ function drawHome() {
   ctx.fillText(bestText, W / 2, H * 0.75);
 }
 
+// 绘制导航页（模式选择）：找字母（可点）/ 拼单词（置灰，即将到来）
+function drawNav() {
+  ctx.fillStyle = bgGrad;
+  ctx.fillRect(0, 0, W, H);
+
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+
+  // 标题：随屏宽自适应
+  let titleSize = Math.min(80, W * 0.2);
+  ctx.font = 'bold ' + titleSize + 'px sans-serif';
+  let tW = ctx.measureText('字母拼拼').width;
+  if (tW > W * 0.92) titleSize = Math.floor(titleSize * (W * 0.92) / tW);
+  ctx.font = 'bold ' + titleSize + 'px sans-serif';
+  ctx.fillStyle = '#5a2d00';
+  ctx.fillText('字母拼拼', W / 2, H * 0.16);
+
+  // 副标题
+  const sub = '选择一个模式开始吧';
+  let subSize = Math.min(26, W * 0.07);
+  ctx.font = subSize + 'px sans-serif';
+  let sW = ctx.measureText(sub).width;
+  if (sW > W * 0.9) subSize = Math.floor(subSize * (W * 0.9) / sW);
+  ctx.font = subSize + 'px sans-serif';
+  ctx.fillStyle = '#8a5a2b';
+  ctx.fillText(sub, W / 2, H * 0.24);
+
+  // 两张菜单卡片（宽度随屏宽自适应，上下居中偏下排布）
+  const cardW = Math.min(360, W - 80);
+  const cardH = 120;
+  const gap = 36;
+  const totalH = cardH * 2 + gap;
+  const startY = (H - totalH) / 2 + H * 0.04;
+
+  navFindBtn = { x: W / 2 - cardW / 2, y: startY, w: cardW, h: cardH };
+  drawMenuCard(navFindBtn, '找字母', '听音找字母', true);
+
+  navSpellBtn = { x: W / 2 - cardW / 2, y: startY + cardH + gap, w: cardW, h: cardH };
+  drawMenuCard(navSpellBtn, '拼单词', '按序拼单词', false);
+}
+
+// 绘制一张菜单卡片（enabled=false 时置灰并显示“即将到来”标签）
+function drawMenuCard(rect, title, sub, enabled) {
+  const r = 22;
+  ctx.fillStyle = enabled ? '#ff7a18' : '#cfcfcf';
+  roundRectPath(ctx, rect.x, rect.y, rect.w, rect.h, r);
+  ctx.fill();
+  ctx.lineWidth = 3;
+  ctx.strokeStyle = 'rgba(255,255,255,0.6)';
+  roundRectPath(ctx, rect.x, rect.y, rect.w, rect.h, r);
+  ctx.stroke();
+
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'middle';
+  ctx.fillStyle = '#ffffff';
+  ctx.font = 'bold 44px sans-serif';
+  ctx.fillText(title, rect.x + 32, rect.y + rect.h / 2 - 16);
+
+  let subSize = Math.min(24, rect.w * 0.06);
+  ctx.font = subSize + 'px sans-serif';
+  ctx.fillStyle = 'rgba(255,255,255,0.92)';
+  ctx.fillText(sub, rect.x + 32, rect.y + rect.h / 2 + 22);
+
+  if (enabled) {
+    ctx.textAlign = 'right';
+    ctx.fillStyle = 'rgba(255,255,255,0.9)';
+    ctx.font = '40px sans-serif';
+    ctx.fillText('›', rect.x + rect.w - 28, rect.y + rect.h / 2);
+  } else {
+    const tag = '即将到来';
+    ctx.font = '22px sans-serif';
+    const tw = ctx.measureText(tag).width + 24;
+    const th = 36;
+    const tx = rect.x + rect.w - tw - 18;
+    const ty = rect.y + rect.h / 2 - th / 2;
+    ctx.fillStyle = 'rgba(120,120,120,0.9)';
+    roundRectPath(ctx, tx, ty, tw, th, 18);
+    ctx.fill();
+    ctx.textAlign = 'center';
+    ctx.fillStyle = '#ffffff';
+    ctx.fillText(tag, tx + tw / 2, rect.y + rect.h / 2);
+  }
+  ctx.textAlign = 'center'; // 复位，避免影响其它绘制
+}
+
 function drawPlaying() {
   ctx.fillStyle = bgGrad;
   ctx.fillRect(0, 0, W, H);
@@ -353,7 +442,8 @@ function drawGameOver() {
 }
 
 function draw() {
-  if (state === 'home') drawHome();
+  if (state === 'nav') drawNav();
+  else if (state === 'home') drawHome();
   else if (state === 'playing') drawPlaying();
   else if (state === 'gameover') drawGameOver();
 }
@@ -395,7 +485,10 @@ wx.onTouchStart((e) => {
   const py = (t.clientY !== undefined) ? t.clientY
     : (t.y !== undefined) ? t.y
     : (t.pageY || 0);
-  if (state === 'home') {
+  if (state === 'nav') {
+    // 找字母：进入原首页（主页）；拼单词：置灰不可点，不做处理
+    if (hit(navFindBtn, px, py)) state = 'home';
+  } else if (state === 'home') {
     if (hit(startBtn, px, py)) startGame();
   } else if (state === 'gameover') {
     if (hit(restartBtn, px, py)) startGame();
