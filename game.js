@@ -55,9 +55,11 @@ bgGrad.addColorStop(0, '#fff3e0');
 bgGrad.addColorStop(1, '#ffe0b2');
 
 // ---- 游戏状态 ----
-// state: 'nav' | 'home' | 'playing' | 'gameover'
-//   nav    —— 模式选择导航页（找字母 / 拼单词）
-//   home   —— 找字母模式主页（原首页，含“开始游戏”按钮）
+// state: 'nav' | 'home' | 'playing' | 'gameover' | 'confirmExit'
+//   nav         —— 模式选择导航页（找字母 / 拼单词）
+//   home        —— 找字母模式主页（原首页，含“开始游戏”按钮）
+//   playing     —— 游戏中
+//   confirmExit —— 游戏中点击“退出”后的二次确认弹框（此时游戏暂停）
 let state = 'nav';
 let best = wx.getStorageSync('letterdrop_best') || 0;
 let score = 0;
@@ -78,6 +80,9 @@ let restartBtn = null;           // 结束页“再来一局”按钮区域
 let navFindBtn = null;           // 导航页“找字母”菜单区域
 let navSpellBtn = null;          // 导航页“拼单词”菜单区域（置灰，即将到来）
 let backBtn = null;              // 返回导航页按钮（主页/结束页左上角）
+let exitBtn = null;              // 游戏中右上角“退出”按钮
+let exitConfirmBtn = null;       // 退出确认弹框“确定退出”按钮
+let exitCancelBtn = null;        // 退出确认弹框“继续游戏”按钮
 
 // ---- 流程控制 ----
 function startGame() {
@@ -429,6 +434,66 @@ function drawPlaying() {
   ctx.font = 'bold 44px sans-serif';
   ctx.fillText('得分 ' + score, 0, 0);
   ctx.restore();
+
+  // 右上角“退出”按钮：游戏中可发起退出（弹框二次确认）
+  exitBtn = { x: W - 104, y: 20, w: 84, h: 44 };
+  ctx.fillStyle = 'rgba(255,255,255,0.85)';
+  roundRectPath(ctx, exitBtn.x, exitBtn.y, exitBtn.w, exitBtn.h, 22);
+  ctx.fill();
+  ctx.lineWidth = 1.5;
+  ctx.strokeStyle = 'rgba(192,57,43,0.5)';
+  roundRectPath(ctx, exitBtn.x, exitBtn.y, exitBtn.w, exitBtn.h, 22);
+  ctx.stroke();
+  ctx.fillStyle = '#c0392b';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.font = 'bold 28px sans-serif';
+  ctx.fillText('退出', exitBtn.x + exitBtn.w / 2, exitBtn.y + exitBtn.h / 2 + 1);
+}
+
+// 游戏中“退出”确认弹框（底层先画一次 playing 场景，叠半透明遮罩 + 对话框）
+function drawExitConfirm() {
+  ctx.fillStyle = 'rgba(0,0,0,0.5)';
+  ctx.fillRect(0, 0, W, H);
+
+  const cardW = Math.min(320, W - 60);
+  const cardH = 230;
+  const cardX = W / 2 - cardW / 2;
+  const cardY = H / 2 - cardH / 2;
+  ctx.fillStyle = '#ffffff';
+  roundRectPath(ctx, cardX, cardY, cardW, cardH, 24);
+  ctx.fill();
+
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillStyle = '#5a2d00';
+  ctx.font = 'bold 38px sans-serif';
+  ctx.fillText('退出当前游戏？', W / 2, cardY + 56);
+
+  ctx.fillStyle = '#8a5a2b';
+  ctx.font = '28px sans-serif';
+  ctx.fillText('当前得分 ' + score, W / 2, cardY + 104);
+
+  const btnW = (cardW - 60) / 2;
+  const btnH = 60;
+  const btnY = cardY + cardH - 84;
+  // 继续游戏（取消）
+  exitCancelBtn = { x: cardX + 20, y: btnY, w: btnW, h: btnH };
+  ctx.fillStyle = '#eeeeee';
+  roundRectPath(ctx, exitCancelBtn.x, exitCancelBtn.y, exitCancelBtn.w, exitCancelBtn.h, 16);
+  ctx.fill();
+  ctx.fillStyle = '#555555';
+  ctx.font = 'bold 30px sans-serif';
+  ctx.fillText('继续', exitCancelBtn.x + btnW / 2, exitCancelBtn.y + btnH / 2);
+
+  // 确定退出（确认）
+  exitConfirmBtn = { x: cardX + 40 + btnW, y: btnY, w: btnW, h: btnH };
+  ctx.fillStyle = '#ff7a18';
+  roundRectPath(ctx, exitConfirmBtn.x, exitConfirmBtn.y, exitConfirmBtn.w, exitConfirmBtn.h, 16);
+  ctx.fill();
+  ctx.fillStyle = '#ffffff';
+  ctx.font = 'bold 30px sans-serif';
+  ctx.fillText('退出', exitConfirmBtn.x + btnW / 2, exitConfirmBtn.y + btnH / 2);
 }
 
 function drawGameOver() {
@@ -471,6 +536,7 @@ function draw() {
   if (state === 'nav') drawNav();
   else if (state === 'home') drawHome();
   else if (state === 'playing') drawPlaying();
+  else if (state === 'confirmExit') { drawPlaying(); drawExitConfirm(); }
   else if (state === 'gameover') drawGameOver();
 }
 
@@ -521,7 +587,22 @@ wx.onTouchStart((e) => {
     if (hit(backBtn, px, py)) { state = 'nav'; return; }
     if (hit(restartBtn, px, py)) startGame();
   } else if (state === 'playing') {
+    if (hit(exitBtn, px, py)) { state = 'confirmExit'; return; } // 发起退出 -> 弹框确认
     onTapLetter(px, py);
+  } else if (state === 'confirmExit') {
+    if (hit(exitConfirmBtn, px, py)) {
+      // 确定退出：保存最高分并返回导航页
+      best = Math.max(best, score);
+      wx.setStorageSync('letterdrop_best', best);
+      state = 'nav';
+      return;
+    }
+    if (hit(exitCancelBtn, px, py)) {
+      // 继续游戏：解除暂停
+      state = 'playing';
+      lastTime = Date.now();
+      return;
+    }
   }
 });
 
