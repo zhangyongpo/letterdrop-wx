@@ -12,7 +12,7 @@ const { announceLetter, announceWord, speakWord } = require('./utils/audio');
 // 英文手写体（Patrick Hand，OFL 开源可商用），用于拼单词页，更接近英语字帖书写风格。
 // wx.loadFont 在游戏启动时加载一次，Canvas 用返回的字族名即可，加载完成前自动回退 sans-serif。
 const SPELL_FONT = (typeof wx !== 'undefined' && wx.loadFont)
-  ? wx.loadFont('/assets/fonts/patrickhand.ttf')
+  ? wx.loadFont('assets/fonts/patrickhand.ttf')
   : null;
 const { BOOK } = require('./data/words');
 
@@ -837,32 +837,33 @@ function drawSpell() {
     ctx.font = (Math.min(20, boxW * 0.05)) + 'px ' + (SPELL_FONT || 'sans-serif');
     ctx.fillText('点击下方字母，拼出听到的单词', W / 2, (lineY[1] + lineY[2]) / 2);
   } else {
-    // 所有字母统一字号（= 2 个格高，正好填满对应占位的格），按书写规范竖直定位：
-    // 中格字母居中于中格；上伸字母(bdfhklt)占上中两格；下伸字母(gpqy)占中下两格。
-    // 字母用 measureText 紧凑连续书写并整体居中，像正常写单词，不再逐字分大格。
-    const fz = lineGap * 2;
-    const ASC = 'bdfhklt';
-    const DESC = 'gpqy';
-    const stepGap = fz * 0.12;   // 字母间紧凑步距
+    // 所有字母统一字号，以“书写基线”对齐四线格的基线 lineY[2]，按字体自身度量自然落位：
+    // 中格字母正好落在中格、上伸字母自然上伸、下伸字母自然下伸，不会踩线。
+    // 先用小写 'x' 的实际字高（x-height）校准字号，使 x-height 正好等于中格高度 lineGap。
+    const family = SPELL_FONT || 'sans-serif';
+    let fz = lineGap * 2;
+    ctx.font = fz + 'px ' + family;
+    const m0 = ctx.measureText('x');
+    const xh = m0.actualBoundingBoxAscent || (fz * 0.5);
+    fz = fz * (lineGap / xh);                // 校准：x-height => lineGap
+    ctx.font = fz + 'px ' + family;
+    ctx.textBaseline = 'alphabetic';          // 基线对齐 lineY[2]
+    const stepGap = fz * 0.12;               // 字母间紧凑步距
     const adv = [];
     let totalW = 0;
-    ctx.font = Math.round(fz) + 'px ' + (SPELL_FONT || 'sans-serif');
     for (let i = 0; i < input.length; i++) {
       const w = ctx.measureText(input[i]).width;
       adv.push(w);
       totalW += w + (i < input.length - 1 ? stepGap : 0);
     }
-    let x = W / 2 - totalW / 2;  // 左起光标（字母左边缘）
+    let x = W / 2 - totalW / 2;              // 左起光标（字母左边缘）
     ctx.fillStyle = '#5a2d00';
     for (let i = 0; i < input.length; i++) {
       const ch = input[i];
-      let midY;
-      if (ASC.indexOf(ch) >= 0) midY = (lineY[0] + lineY[2]) / 2;
-      else if (DESC.indexOf(ch) >= 0) midY = (lineY[1] + lineY[3]) / 2;
-      else midY = (lineY[1] + lineY[2]) / 2;
-      ctx.fillText(ch, x + adv[i] / 2, midY);
+      ctx.fillText(ch, x + adv[i] / 2, lineY[2]);
       x += adv[i] + stepGap;
     }
+    ctx.textBaseline = 'middle';              // 恢复，避免影响后续绘制
   }
 
   // 候选字母网格：复用“找字母”掉落字母的彩色方块样式，每行 5 个，行间距更小
