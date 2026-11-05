@@ -77,6 +77,7 @@ let startBtn = null;             // 首页“开始游戏”按钮区域
 let restartBtn = null;           // 结束页“再来一局”按钮区域
 let navFindBtn = null;           // 导航页“找字母”菜单区域
 let navSpellBtn = null;          // 导航页“拼单词”菜单区域（置灰，即将到来）
+let backBtn = null;              // 返回导航页按钮（主页/结束页左上角）
 
 // ---- 流程控制 ----
 function startGame() {
@@ -262,12 +263,33 @@ function drawButton(rect, label) {
   ctx.fillText(label, rect.x + rect.w / 2, rect.y + rect.h / 2);
 }
 
+// 左上角“返回”按钮（圆形圆角，白色底 + ← 箭头），点击回到导航页
+function drawBackButton(rect) {
+  const r = 24;
+  ctx.fillStyle = 'rgba(255,255,255,0.9)';
+  roundRectPath(ctx, rect.x, rect.y, rect.w, rect.h, r);
+  ctx.fill();
+  ctx.lineWidth = 2;
+  ctx.strokeStyle = 'rgba(90,45,0,0.25)';
+  roundRectPath(ctx, rect.x, rect.y, rect.w, rect.h, r);
+  ctx.stroke();
+  ctx.fillStyle = '#5a2d00';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.font = 'bold 36px sans-serif';
+  ctx.fillText('←', rect.x + rect.w / 2, rect.y + rect.h / 2 + 1);
+}
+
 function drawHome() {
   ctx.fillStyle = bgGrad;
   ctx.fillRect(0, 0, W, H);
 
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
+
+  // 左上角返回按钮：回到模式选择导航页
+  backBtn = { x: 20, y: 20, w: 80, h: 48 };
+  drawBackButton(backBtn);
 
   // 标题：字号随屏宽自适应，并保证不超出屏宽（避免两侧被截）
   let titleSize = Math.min(88, W * 0.22);
@@ -439,6 +461,10 @@ function drawGameOver() {
 
   restartBtn = { x: W / 2 - 160, y: H * 0.62, w: 320, h: 92 };
   drawButton(restartBtn, '再来一局');
+
+  // 左上角返回按钮：回到模式选择导航页
+  backBtn = { x: 20, y: 20, w: 80, h: 48 };
+  drawBackButton(backBtn);
 }
 
 function draw() {
@@ -489,8 +515,10 @@ wx.onTouchStart((e) => {
     // 找字母：进入原首页（主页）；拼单词：置灰不可点，不做处理
     if (hit(navFindBtn, px, py)) state = 'home';
   } else if (state === 'home') {
+    if (hit(backBtn, px, py)) { state = 'nav'; return; }
     if (hit(startBtn, px, py)) startGame();
   } else if (state === 'gameover') {
+    if (hit(backBtn, px, py)) { state = 'nav'; return; }
     if (hit(restartBtn, px, py)) startGame();
   } else if (state === 'playing') {
     onTapLetter(px, py);
