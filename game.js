@@ -413,20 +413,20 @@ function drawButton(rect, label) {
   ctx.fillText(label, rect.x + rect.w / 2, rect.y + rect.h / 2);
 }
 
-// 左上角“返回”按钮（圆形圆角，白色底 + ← 箭头），点击回到导航页
+// 左上角“返回”按钮（圆角白底 + ← 箭头），点击回到上一级；尺寸小巧，避免与顶部标题重合
 function drawBackButton(rect) {
-  const r = 24;
+  const r = 10;
   ctx.fillStyle = 'rgba(255,255,255,0.9)';
   roundRectPath(ctx, rect.x, rect.y, rect.w, rect.h, r);
   ctx.fill();
-  ctx.lineWidth = 2;
-  ctx.strokeStyle = 'rgba(90,45,0,0.25)';
+  ctx.lineWidth = 1.5;
+  ctx.strokeStyle = 'rgba(90,45,0,0.22)';
   roundRectPath(ctx, rect.x, rect.y, rect.w, rect.h, r);
   ctx.stroke();
   ctx.fillStyle = '#5a2d00';
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
-  ctx.font = 'bold 36px sans-serif';
+  ctx.font = 'bold ' + Math.round(Math.min(26, rect.h * 0.62)) + 'px sans-serif';
   ctx.fillText('←', rect.x + rect.w / 2, rect.y + rect.h / 2 + 1);
 }
 
@@ -438,7 +438,7 @@ function drawHome() {
   ctx.textBaseline = 'middle';
 
   // 左上角返回按钮：回到模式选择导航页
-  backBtn = { x: 20, y: 20, w: 80, h: 48 };
+  backBtn = { x: 14, y: 14, w: 52, h: 40 };
   drawBackButton(backBtn);
 
   // 标题：字号随屏宽自适应，并保证不超出屏宽（避免两侧被截）
@@ -677,7 +677,7 @@ function drawGameOver() {
   drawButton(restartBtn, '再来一局');
 
   // 左上角返回按钮：回到模式选择导航页
-  backBtn = { x: 20, y: 20, w: 80, h: 48 };
+  backBtn = { x: 14, y: 14, w: 52, h: 40 };
   drawBackButton(backBtn);
 }
 
@@ -719,7 +719,7 @@ function drawGrade() {
   ctx.textBaseline = 'middle';
 
   // 返回导航页
-  backBtn = { x: 20, y: 20, w: 80, h: 48 };
+  backBtn = { x: 14, y: 14, w: 52, h: 40 };
   drawBackButton(backBtn);
 
   let titleSize = Math.min(64, W * 0.16);
@@ -746,7 +746,7 @@ function drawChapter() {
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
 
-  backBtn = { x: 20, y: 20, w: 80, h: 48 };
+  backBtn = { x: 14, y: 14, w: 52, h: 40 };
   drawBackButton(backBtn);
 
   let titleSize = Math.min(64, W * 0.16);
@@ -790,7 +790,7 @@ function drawSpell() {
   ctx.textBaseline = 'middle';
 
   // 返回按钮（回到章节选择）
-  spellBackBtn = { x: 20, y: 20, w: 80, h: 48 };
+  spellBackBtn = { x: 14, y: 14, w: 52, h: 40 };
   drawBackButton(spellBackBtn);
 
   // 顶部：仅显示当前单词的字母数量（不再显示章节名）
