@@ -3,7 +3,7 @@
 // 文件位于 /assets/audio/<字母>.wav（绝对包路径，真机可用）。
 // 彻底替代原先的腾讯云 ASR 方案——游戏改为“App 报字母、玩家点击”。
 
-const { WORD_AUDIO } = require('./data/word_audio');
+const { WORD_AUDIO } = require('../data/word_audio');
 
 const ctxMap = {};
 
