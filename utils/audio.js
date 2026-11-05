@@ -85,6 +85,9 @@ function announceWord(word, gapMs) {
   playNext();
 }
 
+// 单词真实发音上下文缓存：同一单词复用，反复调用时先 stop 再 play，避免叠加。
+const wordCtxMap = {};
+
 // 播放单词真实发音：优先使用 edge-tts 预生成的单词级 mp3（清单 data/word_audio.js 覆盖的词）；
 // 清单未覆盖（如尚未生成发音的单元）时，自动回退为逐字母拼读，保证任何单词都能出声。
 function speakWord(word) {
@@ -94,15 +97,24 @@ function speakWord(word) {
     return;
   }
   try {
-    const c = wx.createInnerAudioContext();
-    c.src = '/assets/audio/words/' + f + '.mp3';
-    c.obeyMuteSwitch = false;
-    c.onError((res) => {
-      console.log('[audio] 单词发音播放失败，回退拼读', f, res && res.errMsg);
-      c.destroy();
-      announceWord(word);
-    });
-    c.onEnded(() => { c.destroy(); });
+    let c = wordCtxMap[f];
+    if (!c) {
+      c = wx.createInnerAudioContext();
+      c.src = '/assets/audio/words/' + f + '.mp3';
+      c.obeyMuteSwitch = false;
+      // 首次播放在“刚切页 / 文件未缓存”时偶尔被静默丢弃；
+      // 用 onCanplay 兜底：若加载完成后仍未开始播放，再补一次 play。
+      let started = false;
+      c.onPlay(() => { started = true; });
+      c.onCanplay(() => { if (!started) c.play(); });
+      c.onError((res) => {
+        console.log('[audio] 单词发音播放失败，回退拼读', f, res && res.errMsg);
+        if (wordCtxMap[f] === c) delete wordCtxMap[f];
+        announceWord(word);
+      });
+      wordCtxMap[f] = c;
+    }
+    c.stop();
     c.play();
   } catch (e) {
     announceWord(word);

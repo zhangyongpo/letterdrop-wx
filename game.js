@@ -7,7 +7,7 @@ const {
   LETTERS, GROUP_SIZE, COLS, MAX_TARGET_COUNT, GROUPS_PER_LEVEL,
   MAX_LIVES, CORRECT_SCORE, WRONG_PENALTY, speedForLevel
 } = require('./config/gameConfig');
-const { announceLetter, announceWord, speakWord } = require('./utils/audio');
+const { announceLetter, announceWord, speakWord, speakLetter } = require('./utils/audio');
 const { BOOK } = require('./data/words');
 
 // “拼单词”模式章节列表：各单元 + “全部章节”
@@ -229,7 +229,10 @@ function startSpellChapter(chapterId) {
   spellIndex = 0;
   loadSpellWord(0);
   state = 'spell';
-  speakWord(spellWord); // 进入时默认播放一遍（优先真实发音，回退逐字母拼读）
+  // 进入时默认播放一遍（优先真实发音，回退逐字母拼读）。
+  // 延迟约 350ms：刚从菜单切换过来，立即 play 在微信小游戏里偶尔会被静默丢弃，
+  // 延迟可避开页面切换瞬间的渲染抢占，确保首个单词一定能出声。
+  setTimeout(() => { if (state === 'spell') speakWord(spellWord); }, 350);
 }
 
 // 切换到下一个单词；列表结束则返回二级菜单
@@ -247,6 +250,7 @@ function nextSpellWord() {
 function toggleCandidate(idx) {
   const c = spellCandidates[idx];
   if (!c) return;
+  let isAdd = false;
   if (c.selected) {
     const oi = spellOrder.indexOf(idx);
     if (oi >= 0) spellOrder.splice(oi, 1);
@@ -254,11 +258,14 @@ function toggleCandidate(idx) {
   } else {
     c.selected = true;
     spellOrder.push(idx);
+    isAdd = true;
   }
   const input = spellOrder.map((i) => spellCandidates[i].ch).join('');
   if (input === spellWord) {
     spellSolved = true;
     speakWord(spellWord); // 拼对后再播一遍真实发音强化记忆
+  } else if (isAdd) {
+    speakLetter(c.ch); // 选中字母时播一下该字母发音，给孩子即时跟读反馈
   }
 }
 
