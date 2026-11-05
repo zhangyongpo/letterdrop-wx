@@ -413,9 +413,12 @@ function drawButton(rect, label) {
   ctx.fillText(label, rect.x + rect.w / 2, rect.y + rect.h / 2);
 }
 
-// 左上角“返回”按钮（圆角白底 + ← 箭头），点击回到上一级；尺寸小巧，避免与顶部标题重合
+// 左上角“返回”按钮：轻量圆角白底 + 细线条返回箭头（‹ 形，尖朝左、圆角端点），
+// 贴近微信小程序导航栏返回图标的风格；尺寸小巧，避免与顶部标题重合
 function drawBackButton(rect) {
+  ctx.save();
   const r = 10;
+  // 轻量圆角白底（仅作底衬，保证在彩色背景上清晰）
   ctx.fillStyle = 'rgba(255,255,255,0.9)';
   roundRectPath(ctx, rect.x, rect.y, rect.w, rect.h, r);
   ctx.fill();
@@ -423,11 +426,22 @@ function drawBackButton(rect) {
   ctx.strokeStyle = 'rgba(90,45,0,0.22)';
   roundRectPath(ctx, rect.x, rect.y, rect.w, rect.h, r);
   ctx.stroke();
-  ctx.fillStyle = '#5a2d00';
-  ctx.textAlign = 'center';
-  ctx.textBaseline = 'middle';
-  ctx.font = 'bold ' + Math.round(Math.min(26, rect.h * 0.62)) + 'px sans-serif';
-  ctx.fillText('←', rect.x + rect.w / 2, rect.y + rect.h / 2 + 1);
+
+  // 两段式线条返回箭头（指向左）
+  const cy = rect.y + rect.h / 2;
+  const tipX = rect.x + rect.w * 0.40;        // 顶点（最左）
+  const armX = rect.x + rect.w * 0.62;         // 右端（两臂汇聚的反向点）
+  const armY = rect.h * 0.22;                  // 垂直臂长
+  ctx.strokeStyle = '#5a2d00';
+  ctx.lineWidth = 3;
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+  ctx.beginPath();
+  ctx.moveTo(armX, cy - armY);
+  ctx.lineTo(tipX, cy);
+  ctx.lineTo(armX, cy + armY);
+  ctx.stroke();
+  ctx.restore();
 }
 
 function drawHome() {
