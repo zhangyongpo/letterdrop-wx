@@ -8,6 +8,12 @@ const {
   MAX_LIVES, CORRECT_SCORE, WRONG_PENALTY, speedForLevel
 } = require('./config/gameConfig');
 const { announceLetter, announceWord, speakWord } = require('./utils/audio');
+
+// 英文手写体（Patrick Hand，OFL 开源可商用），用于拼单词页，更接近英语字帖书写风格。
+// wx.loadFont 在游戏启动时加载一次，Canvas 用返回的字族名即可，加载完成前自动回退 sans-serif。
+const SPELL_FONT = (typeof wx !== 'undefined' && wx.loadFont)
+  ? wx.loadFont('/assets/fonts/patrickhand.ttf')
+  : null;
 const { BOOK } = require('./data/words');
 
 // “拼单词”模式章节列表：各单元 + “全部章节”
@@ -374,7 +380,7 @@ function drawSpellTile(x, y, size, ch, selected, idx) {
   ctx.fillStyle = '#ffffff';
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
-  ctx.font = 'bold ' + Math.round(size * 0.5) + 'px sans-serif';
+  ctx.font = Math.round(size * 0.5) + 'px ' + (SPELL_FONT || 'sans-serif');
   ctx.fillText(ch, x + size / 2, y + size / 2);
 
   // 选中：右上角绿色对勾徽标
@@ -828,7 +834,7 @@ function drawSpell() {
   const input = spellOrder.map((i) => spellCandidates[i].ch).join('');
   if (input.length === 0) {
     ctx.fillStyle = '#bbbbbb';
-    ctx.font = (Math.min(20, boxW * 0.05)) + 'px sans-serif';
+    ctx.font = (Math.min(20, boxW * 0.05)) + 'px ' + (SPELL_FONT || 'sans-serif');
     ctx.fillText('点击下方字母，拼出听到的单词', W / 2, (lineY[1] + lineY[2]) / 2);
   } else {
     // 所有字母统一字号（= 2 个格高，正好填满对应占位的格），按书写规范竖直定位：
@@ -840,7 +846,7 @@ function drawSpell() {
     const stepGap = fz * 0.12;   // 字母间紧凑步距
     const adv = [];
     let totalW = 0;
-    ctx.font = 'bold ' + Math.round(fz) + 'px sans-serif';
+    ctx.font = Math.round(fz) + 'px ' + (SPELL_FONT || 'sans-serif');
     for (let i = 0; i < input.length; i++) {
       const w = ctx.measureText(input[i]).width;
       adv.push(w);
