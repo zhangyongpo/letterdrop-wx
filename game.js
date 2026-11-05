@@ -813,22 +813,12 @@ function drawChapter() {
   SPELL_CHAPTERS.forEach((ch, i) => {
     const y = startY + i * (rowH + gap) - chapterScrollY;
     const rect = { x: 20, y, w: W - 40, h: rowH };
-    // 已开放章节可点击进入；“全部章节”始终可用（仅含已开放单元单词），其余单元置灰
-    const enabled = (ch.id === 'all') ? true : (SPELL_OPEN.indexOf(ch.id) >= 0);
+    // 仅 SPELL_OPEN 中的已开放章节可点击进入；其余（含“全部章节”）一律置灰提示“即将到来”
+    const enabled = SPELL_OPEN.indexOf(ch.id) >= 0;
     chapterCards.push({ rect, id: ch.id, enabled });
     // 仅绘制落在可视区域内的卡片
     if (y + rowH >= listTop - 4 && y <= listBottom + 4) {
-      let count;
-      if (ch.id === 'all') {
-        // “全部章节”只统计已开放单元的单词，与 startSpellChapter 保持一致
-        count = 0;
-        SPELL_OPEN.forEach((id) => {
-          const c = BOOK.chapters.find((x) => x.id === id);
-          if (c) count += c.words.filter((w) => !/\s/.test(w.en)).length;
-        });
-      } else {
-        count = ch.words.filter((w) => !/\s/.test(w.en)).length;
-      }
+      const count = ch.words.filter((w) => !/\s/.test(w.en)).length;
       drawMenuCard(rect, ch.name, count + ' 个单词', enabled, uniTitleSize);
     }
   });
