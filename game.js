@@ -7,7 +7,7 @@ const {
   LETTERS, GROUP_SIZE, COLS, MAX_TARGET_COUNT, GROUPS_PER_LEVEL,
   MAX_LIVES, CORRECT_SCORE, WRONG_PENALTY, speedForLevel
 } = require('./config/gameConfig');
-const { announceLetter, announceWord, speakWord, speakLetter } = require('./utils/audio');
+const { announceLetter, announceWord, speakWord } = require('./utils/audio');
 const { BOOK } = require('./data/words');
 
 // “拼单词”模式章节列表：各单元 + “全部章节”
@@ -244,13 +244,15 @@ function nextSpellWord() {
     return;
   }
   loadSpellWord(spellIndex);
+  // 切到下一个单词后自动播放一遍（优先真实发音，回退逐字母拼读），
+  // 延迟 ~350ms 避开弹框消失/页面切换瞬间的渲染抢占，确保一定能出声。
+  setTimeout(() => { if (state === 'spell') speakWord(spellWord); }, 350);
 }
 
 // 点击候选字母：已选则取消（从输入框移除），未选则追加到末尾；每次点击后判断是否拼对
 function toggleCandidate(idx) {
   const c = spellCandidates[idx];
   if (!c) return;
-  let isAdd = false;
   if (c.selected) {
     const oi = spellOrder.indexOf(idx);
     if (oi >= 0) spellOrder.splice(oi, 1);
@@ -258,14 +260,11 @@ function toggleCandidate(idx) {
   } else {
     c.selected = true;
     spellOrder.push(idx);
-    isAdd = true;
   }
   const input = spellOrder.map((i) => spellCandidates[i].ch).join('');
   if (input === spellWord) {
     spellSolved = true;
     speakWord(spellWord); // 拼对后再播一遍真实发音强化记忆
-  } else if (isAdd) {
-    speakLetter(c.ch); // 选中字母时播一下该字母发音，给孩子即时跟读反馈
   }
 }
 
