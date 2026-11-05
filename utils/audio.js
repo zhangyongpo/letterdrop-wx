@@ -58,4 +58,29 @@ function announceLetter(letter, gapMs) {
   playOne();
 }
 
-module.exports = { speakLetter, announceLetter };
+// 拼读整个单词：逐字母播放包内字母发音（A.mp3 等），每个字母间间隔 gapMs。
+// 用于“拼单词”模式——目前仅有单字母音频，故以“字母名逐个念”的方式朗读单词，
+// 无需任何云端 / 网络 / 额外音频文件。若日后需要真实单词发音，可替换为单词级 mp3。
+function announceWord(word, gapMs) {
+  const letters = String(word).toLowerCase().split('');
+  const gap = typeof gapMs === 'number' ? gapMs : 260;
+  let i = 0;
+  const playNext = () => {
+    if (i >= letters.length) return;
+    const up = letters[i].toUpperCase();
+    i += 1;
+    try {
+      const c = wx.createInnerAudioContext();
+      c.src = '/assets/audio/' + up + '.mp3';
+      c.obeyMuteSwitch = false;
+      c.onError(() => { c.destroy(); setTimeout(playNext, gap); });
+      c.onEnded(() => { c.destroy(); setTimeout(playNext, gap); });
+      c.play();
+    } catch (e) {
+      setTimeout(playNext, gap);
+    }
+  };
+  playNext();
+}
+
+module.exports = { speakLetter, announceLetter, announceWord };

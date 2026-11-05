@@ -7,7 +7,11 @@ const {
   LETTERS, GROUP_SIZE, COLS, MAX_TARGET_COUNT, GROUPS_PER_LEVEL,
   MAX_LIVES, CORRECT_SCORE, WRONG_PENALTY, speedForLevel
 } = require('./config/gameConfig');
-const { announceLetter } = require('./utils/audio');
+const { announceLetter, announceWord } = require('./utils/audio');
+const { BOOK } = require('./data/words');
+
+// “拼单词”模式章节列表：各单元 + “全部章节”
+const SPELL_CHAPTERS = BOOK.chapters.concat(BOOK.all);
 
 // 字母徽标配色（彩色圆角方块，白字）
 const LETTER_COLORS = ['#ff7a18', '#ff5252', '#42a5f5', '#66bb6a', '#ab47bc', '#ffca28', '#26c6da', '#ec407a'];
@@ -56,10 +60,14 @@ bgGrad.addColorStop(1, '#ffe0b2');
 
 // ---- 游戏状态 ----
 // state: 'nav' | 'home' | 'playing' | 'gameover' | 'confirmExit'
+//         | 'grade' | 'chapter' | 'spell'
 //   nav         —— 模式选择导航页（找字母 / 拼单词）
 //   home        —— 找字母模式主页（原首页，含“开始游戏”按钮）
-//   playing     —— 游戏中
-//   confirmExit —— 游戏中点击“退出”后的二次确认弹框（此时游戏暂停）
+//   playing     —— 找字母游戏中
+//   confirmExit —— 找字母游戏中点击“退出”后的二次确认弹框（游戏暂停）
+//   grade       —— 拼单词：一级菜单（三年级上册）
+//   chapter     —— 拼单词：二级菜单（具体章节 + 全部章节）
+//   spell       —— 拼单词：拼写练习（含答对后的弹框）
 let state = 'nav';
 let best = wx.getStorageSync('letterdrop_best') || 0;
 let score = 0;
@@ -83,6 +91,24 @@ let backBtn = null;              // 返回导航页按钮（主页/结束页左�
 let exitBtn = null;              // 游戏中左上角“退出”按钮
 let exitConfirmBtn = null;       // 退出确认弹框“确定退出”按钮
 let exitCancelBtn = null;        // 退出确认弹框“继续游戏”按钮
+
+// ---- 拼单词模式相关状态/变量 ----
+let gradeBtn = null;             // 一级菜单“三年级上册”卡片区域
+let chapterCards = [];           // 二级菜单各章节卡片区域（数组）
+let chapterScrollY = 0;          // 二级菜单列表滚动偏移
+let lastTouchY = null;           // 触摸拖动时的上一个触点 Y（用于章节滚动）
+let spellChapterName = '';       // 当前章节名（拼写页顶部显示）
+let spellList = [];              // 当前章节的单词列表（已打乱）
+let spellIndex = 0;              // 当前单词下标
+let spellWord = '';              // 当前要拼的单词（小写）
+let spellMeaning = '';           // 当前单词中文释义
+let spellCandidates = [];        // 候选字母 [{ch, selected}]
+let spellOrder = [];             // 已选字母对应的候选下标顺序
+let spellSolved = false;         // 当前单词是否已拼对（显示弹框）
+let spellBackBtn = null;         // 拼写页返回按钮（左上角）
+let spellSpeakerBtn = null;      // 拼写页小喇叭按钮（底部）
+let spellNextBtn = null;         // 答对弹框“下一个”按钮
+let spellTileRects = [];         // 候选字母方块的可点击区域（{x,y,w,h} 左上角）
 
 // ---- 流程控制 ----
 function startGame() {
@@ -162,6 +188,78 @@ function endGame() {
   best = Math.max(best, score);
   wx.setStorageSync('letterdrop_best', best);
   state = 'gameover';
+}
+
+// ============ 拼单词模式 ============
+
+// 生成候选字母：数量为单词长度的 2~3 倍（至少 6 个），全部小写。
+// 必含该单词所需的全部字母（含重复），其余为随机干扰项。
+function buildCandidates(word) {
+  const need = word.split('');              // 已含单词内的重复字母
+  const n = need.length;
+  let total = n * 2 + Math.floor(Math.random() * (n + 1)); // 区间 [2n, 3n]
+  if (total < 6) total = 6;                 // 最少 6 个
+  const pool = need.slice();
+  const alpha = 'abcdefghijklmnopqrstuvwxyz';
+  let guard = 0;
+  while (pool.length < total && guard < 300) {
+    pool.push(alpha[Math.floor(Math.random() * 26)]);
+    guard++;
+  }
+  return shuffled(pool).map((ch) => ({ ch, selected: false }));
+}
+
+// 载入第 i 个单词（重置候选与选择）
+function loadSpellWord(i) {
+  const w = spellList[i];
+  spellWord = w.en.toLowerCase();
+  spellMeaning = w.cn;
+  spellCandidates = buildCandidates(spellWord);
+  spellOrder = [];
+  spellSolved = false;
+}
+
+// 进入某章节的拼写练习
+function startSpellChapter(chapterId) {
+  const ch = SPELL_CHAPTERS.find((c) => c.id === chapterId);
+  if (!ch) return;
+  spellChapterName = ch.name;
+  // 过滤掉含空格的短语（不适合逐字母拼写），再打乱顺序
+  spellList = shuffled(ch.words.filter((w) => !/\s/.test(w.en)));
+  spellIndex = 0;
+  loadSpellWord(0);
+  state = 'spell';
+  announceWord(spellWord); // 进入时默认播放一遍（逐字母拼读）
+}
+
+// 切换到下一个单词；列表结束则返回二级菜单
+function nextSpellWord() {
+  spellIndex += 1;
+  if (spellIndex >= spellList.length) {
+    state = 'chapter';
+    chapterScrollY = 0;
+    return;
+  }
+  loadSpellWord(spellIndex);
+}
+
+// 点击候选字母：已选则取消（从输入框移除），未选则追加到末尾；每次点击后判断是否拼对
+function toggleCandidate(idx) {
+  const c = spellCandidates[idx];
+  if (!c) return;
+  if (c.selected) {
+    const oi = spellOrder.indexOf(idx);
+    if (oi >= 0) spellOrder.splice(oi, 1);
+    c.selected = false;
+  } else {
+    c.selected = true;
+    spellOrder.push(idx);
+  }
+  const input = spellOrder.map((i) => spellCandidates[i].ch).join('');
+  if (input === spellWord) {
+    spellSolved = true;
+    announceWord(spellWord); // 拼对后再拼读一遍强化记忆
+  }
 }
 
 // ---- 更新 ----
@@ -370,7 +468,7 @@ function drawNav() {
   drawMenuCard(navFindBtn, '找字母', '听音找字母', true);
 
   navSpellBtn = { x: W / 2 - cardW / 2, y: startY + cardH + gap, w: cardW, h: cardH };
-  drawMenuCard(navSpellBtn, '拼单词', '按序拼单词', false);
+  drawMenuCard(navSpellBtn, '拼单词', '按序拼单词', true);
 }
 
 // 绘制一张菜单卡片（enabled=false 时置灰并显示“即将到来”标签）
@@ -388,6 +486,10 @@ function drawMenuCard(rect, title, sub, enabled) {
   ctx.textBaseline = 'middle';
   ctx.fillStyle = '#ffffff';
   ctx.font = 'bold 44px sans-serif';
+  // 标题过长时自动缩小字号，避免超出卡片（右侧需给箭头/标签留位）
+  let tw = ctx.measureText(title).width;
+  const maxTW = rect.w - 92;
+  if (tw > maxTW) ctx.font = 'bold ' + Math.floor(44 * maxTW / tw) + 'px sans-serif';
   ctx.fillText(title, rect.x + 32, rect.y + rect.h / 2 - 16);
 
   let subSize = Math.min(24, rect.w * 0.06);
@@ -532,12 +634,257 @@ function drawGameOver() {
   drawBackButton(backBtn);
 }
 
+// 绘制小喇叭按钮（橙色圆 + 白色喇叭 + 声波）
+function drawSpeaker(rect) {
+  const cx = rect.x + rect.w / 2;
+  const cy = rect.y + rect.h / 2;
+  const r = Math.min(rect.w, rect.h) / 2;
+  ctx.fillStyle = '#ff7a18';
+  ctx.beginPath();
+  ctx.arc(cx, cy, r, 0, Math.PI * 2);
+  ctx.fill();
+
+  const bw = r * 0.42;
+  const bh = r * 0.5;
+  const bx = cx - bw * 0.9;
+  const by = cy - bh / 2;
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(bx, by, bw * 0.55, bh);                 // 喇叭主体
+  ctx.beginPath();                                      // 喇叭锥
+  ctx.moveTo(bx + bw * 0.55, by);
+  ctx.lineTo(bx + bw * 1.15, by - bh * 0.35);
+  ctx.lineTo(bx + bw * 1.15, by + bh * 1.35);
+  ctx.lineTo(bx + bw * 0.55, by + bh);
+  ctx.closePath();
+  ctx.fill();
+  ctx.strokeStyle = '#ffffff';                          // 声波
+  ctx.lineWidth = 3;
+  ctx.beginPath(); ctx.arc(cx + r * 0.15, cy, r * 0.5, -Math.PI / 3.2, Math.PI / 3.2); ctx.stroke();
+  ctx.beginPath(); ctx.arc(cx + r * 0.15, cy, r * 0.78, -Math.PI / 3.2, Math.PI / 3.2); ctx.stroke();
+}
+
+// 一级菜单：选择年级（当前仅有“三年级上册”）
+function drawGrade() {
+  ctx.fillStyle = bgGrad;
+  ctx.fillRect(0, 0, W, H);
+
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+
+  // 返回导航页
+  backBtn = { x: 20, y: 20, w: 80, h: 48 };
+  drawBackButton(backBtn);
+
+  let titleSize = Math.min(64, W * 0.16);
+  ctx.font = 'bold ' + titleSize + 'px sans-serif';
+  ctx.fillStyle = '#5a2d00';
+  ctx.fillText('选择年级', W / 2, H * 0.16);
+
+  ctx.fillStyle = '#8a5a2b';
+  ctx.font = (Math.min(26, W * 0.07)) + 'px sans-serif';
+  ctx.fillText('Join In 英语 · 三年级上册', W / 2, H * 0.24);
+
+  const cardW = Math.min(360, W - 80);
+  const cardH = 120;
+  const y = (H - cardH) / 2 + H * 0.04;
+  gradeBtn = { x: W / 2 - cardW / 2, y, w: cardW, h: cardH };
+  drawMenuCard(gradeBtn, BOOK.title, '点击进入单词练习', true);
+}
+
+// 二级菜单：选择章节（含“全部章节”），列表支持上下拖动滚动
+function drawChapter() {
+  ctx.fillStyle = bgGrad;
+  ctx.fillRect(0, 0, W, H);
+
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+
+  backBtn = { x: 20, y: 20, w: 80, h: 48 };
+  drawBackButton(backBtn);
+
+  let titleSize = Math.min(64, W * 0.16);
+  ctx.font = 'bold ' + titleSize + 'px sans-serif';
+  ctx.fillStyle = '#5a2d00';
+  ctx.fillText(BOOK.title, W / 2, H * 0.10);
+
+  ctx.fillStyle = '#8a5a2b';
+  ctx.font = (Math.min(24, W * 0.06)) + 'px sans-serif';
+  ctx.fillText('选择章节开始练习', W / 2, H * 0.17);
+
+  const startY = Math.round(H * 0.22);
+  const rowH = 72;
+  const gap = 16;
+  const listTop = startY;
+  const listBottom = H - 24;
+  const listH = listBottom - listTop;
+  const contentH = SPELL_CHAPTERS.length * (rowH + gap);
+  const maxScroll = Math.max(0, contentH - listH);
+  if (chapterScrollY > maxScroll) chapterScrollY = maxScroll;
+
+  chapterCards = [];
+  SPELL_CHAPTERS.forEach((ch, i) => {
+    const y = startY + i * (rowH + gap) - chapterScrollY;
+    const rect = { x: 20, y, w: W - 40, h: rowH };
+    chapterCards.push({ rect, id: ch.id });
+    // 仅绘制落在可视区域内的卡片
+    if (y + rowH >= listTop - 4 && y <= listBottom + 4) {
+      const count = ch.words.filter((w) => !/\s/.test(w.en)).length;
+      drawMenuCard(rect, ch.name, count + ' 个单词', true);
+    }
+  });
+}
+
+// 拼单词练习页
+function drawSpell() {
+  ctx.fillStyle = bgGrad;
+  ctx.fillRect(0, 0, W, H);
+
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+
+  // 返回按钮（回到章节选择）
+  spellBackBtn = { x: 20, y: 20, w: 80, h: 48 };
+  drawBackButton(spellBackBtn);
+
+  // 顶部章节名 + 进度
+  let headSize = Math.min(30, W * 0.08);
+  ctx.font = 'bold ' + headSize + 'px sans-serif';
+  ctx.fillStyle = '#5a2d00';
+  ctx.fillText(spellChapterName, W / 2, 52);
+  ctx.fillStyle = '#b06a2b';
+  ctx.font = (Math.min(22, W * 0.06)) + 'px sans-serif';
+  ctx.fillText((spellIndex + 1) + ' / ' + spellList.length, W / 2, 86);
+
+  // 输入框（白底圆角 + 阴影感）
+  const boxW = Math.min(360, W - 60);
+  const boxH = 88;
+  const boxX = W / 2 - boxW / 2;
+  const boxY = 110;
+  ctx.fillStyle = 'rgba(255,255,255,0.95)';
+  roundRectPath(ctx, boxX, boxY, boxW, boxH, 20);
+  ctx.fill();
+  ctx.lineWidth = 2;
+  ctx.strokeStyle = 'rgba(255,122,24,0.5)';
+  roundRectPath(ctx, boxX, boxY, boxW, boxH, 20);
+  ctx.stroke();
+
+  const input = spellOrder.map((i) => spellCandidates[i].ch).join('');
+  if (input.length === 0) {
+    ctx.fillStyle = '#bbbbbb';
+    ctx.font = (Math.min(24, boxW * 0.06)) + 'px sans-serif';
+    ctx.fillText('点击下方字母，拼出听到的单词', W / 2, boxY + boxH / 2);
+  } else {
+    ctx.fillStyle = '#5a2d00';
+    let fz = Math.min(48, boxW * 0.11);
+    ctx.font = 'bold ' + fz + 'px sans-serif';
+    ctx.fillText(input, W / 2, boxY + boxH / 2);
+  }
+
+  // 候选字母网格
+  const areaTop = boxY + boxH + 26;
+  const areaBottom = H - 130;             // 给底部小喇叭留位
+  const count = spellCandidates.length;
+  const cols = 6;
+  const rows = Math.ceil(count / cols);
+  const cellW = (W - 36) / cols;
+  const cellH = (areaBottom - areaTop) / rows;
+  const size = Math.min(cellW, cellH) - 14;
+  spellTileRects = [];
+  spellCandidates.forEach((c, i) => {
+    const col = i % cols;
+    const row = Math.floor(i / cols);
+    const cx = 18 + cellW * (col + 0.5);
+    const cy = areaTop + cellH * (row + 0.5);
+    const x = cx - size / 2;
+    const y = cy - size / 2;
+    spellTileRects.push({ x, y, w: size, h: size, idx: i });
+
+    const r = Math.min(14, size * 0.22);
+    ctx.fillStyle = LETTER_COLORS[i % LETTER_COLORS.length];
+    roundRectPath(ctx, x, y, size, size, r);
+    ctx.fill();
+    ctx.lineWidth = c.selected ? 5 : 2;
+    ctx.strokeStyle = c.selected ? '#5a2d00' : 'rgba(255,255,255,0.85)';
+    roundRectPath(ctx, x, y, size, size, r);
+    ctx.stroke();
+
+    ctx.fillStyle = '#ffffff';
+    ctx.font = 'bold ' + Math.round(size * 0.5) + 'px sans-serif';
+    ctx.fillText(c.ch, cx, cy);
+
+    // 选中：右上角绿色对勾徽标
+    if (c.selected) {
+      const bx = x + size - 4;
+      const by = y + 4;
+      const br = size * 0.18;
+      ctx.fillStyle = '#2e7d32';
+      ctx.beginPath(); ctx.arc(bx, by, br, 0, Math.PI * 2); ctx.fill();
+      ctx.strokeStyle = '#ffffff';
+      ctx.lineWidth = 2.5;
+      ctx.beginPath();
+      ctx.moveTo(bx - br * 0.4, by);
+      ctx.lineTo(bx - br * 0.1, by + br * 0.35);
+      ctx.lineTo(bx + br * 0.45, by - br * 0.4);
+      ctx.stroke();
+    }
+  });
+
+  // 底部小喇叭
+  spellSpeakerBtn = { x: W / 2 - 46, y: H - 104, w: 92, h: 92 };
+  drawSpeaker(spellSpeakerBtn);
+
+  // 答对弹框
+  if (spellSolved) drawSpellDialog();
+}
+
+// 答对后的弹框：显示单词与中文释义，附“下一个”按钮
+function drawSpellDialog() {
+  ctx.fillStyle = 'rgba(0,0,0,0.45)';
+  ctx.fillRect(0, 0, W, H);
+
+  const cardW = Math.min(340, W - 50);
+  const cardH = 300;
+  const cardX = W / 2 - cardW / 2;
+  const cardY = H / 2 - cardH / 2;
+  ctx.fillStyle = '#ffffff';
+  roundRectPath(ctx, cardX, cardY, cardW, cardH, 24);
+  ctx.fill();
+
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillStyle = '#2e7d32';
+  ctx.font = 'bold 38px sans-serif';
+  ctx.fillText('拼对啦！', W / 2, cardY + 50);
+
+  ctx.fillStyle = '#5a2d00';
+  ctx.font = 'bold 56px sans-serif';
+  ctx.fillText(spellWord, W / 2, cardY + 116);
+
+  ctx.fillStyle = '#8a5a2b';
+  ctx.font = '30px sans-serif';
+  ctx.fillText(spellMeaning, W / 2, cardY + 174);
+
+  const btnW = cardW - 80;
+  const btnH = 64;
+  const btnY = cardY + cardH - 84;
+  spellNextBtn = { x: W / 2 - btnW / 2, y: btnY, w: btnW, h: btnH };
+  ctx.fillStyle = '#ff7a18';
+  roundRectPath(ctx, spellNextBtn.x, spellNextBtn.y, spellNextBtn.w, spellNextBtn.h, 18);
+  ctx.fill();
+  ctx.fillStyle = '#ffffff';
+  ctx.font = 'bold 32px sans-serif';
+  ctx.fillText('下一个', spellNextBtn.x + btnW / 2, spellNextBtn.y + btnH / 2);
+}
+
 function draw() {
   if (state === 'nav') drawNav();
   else if (state === 'home') drawHome();
   else if (state === 'playing') drawPlaying();
   else if (state === 'confirmExit') { drawPlaying(); drawExitConfirm(); }
   else if (state === 'gameover') drawGameOver();
+  else if (state === 'grade') drawGrade();
+  else if (state === 'chapter') drawChapter();
+  else if (state === 'spell') drawSpell();
 }
 
 // 小游戏渲染循环：优先用 canvas.requestAnimationFrame（Canvas 2D 节点方法，官方推荐）
@@ -567,19 +914,35 @@ function loop() {
 }
 
 // ---- 触摸输入 ----
-wx.onTouchStart((e) => {
+// 统一取出触点坐标（不同基础库字段名不一致：优先 clientX，回退 x / pageX）
+function getPoint(e) {
   const t = (e.touches && e.touches[0]) || (e.changedTouches && e.changedTouches[0]);
-  if (!t) return;
-  // 不同基础库 touch 坐标字段名不一致：优先 clientX，回退 x / pageX
-  const px = (t.clientX !== undefined) ? t.clientX
+  if (!t) return null;
+  const x = (t.clientX !== undefined) ? t.clientX
     : (t.x !== undefined) ? t.x
     : (t.pageX || 0);
-  const py = (t.clientY !== undefined) ? t.clientY
+  const y = (t.clientY !== undefined) ? t.clientY
     : (t.y !== undefined) ? t.y
     : (t.pageY || 0);
+  return { x, y };
+}
+
+wx.onTouchStart((e) => {
+  const p = getPoint(e);
+  if (!p) return;
+  const px = p.x, py = p.y;
   if (state === 'nav') {
-    // 找字母：进入原首页（主页）；拼单词：置灰不可点，不做处理
-    if (hit(navFindBtn, px, py)) state = 'home';
+    // 找字母：进入原首页（主页）；拼单词：进入年级选择
+    if (hit(navFindBtn, px, py)) { state = 'home'; return; }
+    if (hit(navSpellBtn, px, py)) { state = 'grade'; return; }
+  } else if (state === 'grade') {
+    if (hit(backBtn, px, py)) { state = 'nav'; return; }
+    if (hit(gradeBtn, px, py)) { state = 'chapter'; chapterScrollY = 0; return; }
+  } else if (state === 'chapter') {
+    if (hit(backBtn, px, py)) { state = 'grade'; return; }
+    for (const item of chapterCards) {
+      if (hit(item.rect, px, py)) { startSpellChapter(item.id); return; }
+    }
   } else if (state === 'home') {
     if (hit(backBtn, px, py)) { state = 'nav'; return; }
     if (hit(startBtn, px, py)) startGame();
@@ -603,8 +966,39 @@ wx.onTouchStart((e) => {
       lastTime = Date.now();
       return;
     }
+  } else if (state === 'spell') {
+    if (hit(spellBackBtn, px, py)) { state = 'chapter'; chapterScrollY = 0; return; }
+    if (spellSolved) {
+      if (hit(spellNextBtn, px, py)) nextSpellWord(); // 答对弹框：下一个
+      return;
+    }
+    if (hit(spellSpeakerBtn, px, py)) { announceWord(spellWord); return; } // 重听单词
+    for (const tile of spellTileRects) {
+      if (hit(tile, px, py)) { toggleCandidate(tile.idx); return; }
+    }
   }
 });
+
+// 章节列表上下拖动滚动（仅 chapter 状态生效）
+wx.onTouchMove((e) => {
+  if (state !== 'chapter') { lastTouchY = null; return; }
+  const p = getPoint(e);
+  if (!p) return;
+  if (lastTouchY !== null) {
+    const dy = p.y - lastTouchY;
+    chapterScrollY -= dy;
+    const startY = Math.round(H * 0.22);
+    const rowH = 72, gap = 16;
+    const listH = (H - 24) - startY;
+    const contentH = SPELL_CHAPTERS.length * (rowH + gap);
+    const maxScroll = Math.max(0, contentH - listH);
+    if (chapterScrollY < 0) chapterScrollY = 0;
+    if (chapterScrollY > maxScroll) chapterScrollY = maxScroll;
+  }
+  lastTouchY = p.y;
+});
+
+wx.onTouchEnd(() => { lastTouchY = null; });
 
 // 启动渲染循环
 raf(loop);
