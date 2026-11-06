@@ -968,9 +968,9 @@ function drawWordList() {
     ctx.fillStyle = '#8a5a2b';
     ctx.font = '18px sans-serif';
     ctx.fillText(it.cn, rx + 16, y + 43);
-    // 右侧小喇叭：点击播放真实发音
+    // 右侧小喇叭：点击播放真实发音（靠左一点，避免贴右边）
     const spSize = 40;
-    const spRect = { x: W - 16 - spSize, y: y + (rowH - spSize) / 2, w: spSize, h: spSize };
+    const spRect = { x: W - 32 - spSize, y: y + (rowH - spSize) / 2, w: spSize, h: spSize };
     drawSpeaker(spRect);
     wordListSpeakers.push({ rect: spRect, word: it.en.toLowerCase() });
   });
