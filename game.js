@@ -119,6 +119,7 @@ let spellSolved = false;         // 当前单词是否已拼对（显示弹框�
 let spellBackBtn = null;         // 拼写页返回按钮（左上角）
 let spellSpeakerBtn = null;      // 拼写页小喇叭按钮（底部）
 let spellNextBtn = null;         // 答对弹框“下一个”按钮
+let spellDialogSpeakBtn = null;  // 答对弹框“听发音”按钮
 let spellTileRects = [];         // 候选字母方块的可点击区域（{x,y,w,h} 左上角）
 let spellChapterId = '';         // 当前选中的章节 id（模式选择页进入时用）
 let spellMode = 'listen';        // 拼写模式：'listen' 听音拼单词 / 'cn' 中文转单词
@@ -1043,16 +1044,36 @@ function drawSpellDialog() {
   ctx.font = '26px sans-serif';
   ctx.fillText(spellMeaning, W / 2, cardY + 174);
 
-  const btnW = cardW - 80;
+  // 底部两个并排按钮：左“听发音”（白底橙框），右“下一个”（橙底白字）
   const btnH = 64;
   const btnY = cardY + cardH - 84;
-  spellNextBtn = { x: W / 2 - btnW / 2, y: btnY, w: btnW, h: btnH };
+  const gap = 14;
+  const totalW = cardW - 80;
+  const btnW = (totalW - gap) / 2;
+  const leftX = W / 2 - totalW / 2;
+  const rightX = leftX + btnW + gap;
+
+  // 左侧：听发音（两种模式都可用，弹框里再听一遍真实发音）
+  spellDialogSpeakBtn = { x: leftX, y: btnY, w: btnW, h: btnH };
+  ctx.fillStyle = '#ffffff';
+  roundRectPath(ctx, leftX, btnY, btnW, btnH, 18);
+  ctx.fill();
+  ctx.lineWidth = 2;
+  ctx.strokeStyle = '#ff7a18';
+  roundRectPath(ctx, leftX, btnY, btnW, btnH, 18);
+  ctx.stroke();
   ctx.fillStyle = '#ff7a18';
-  roundRectPath(ctx, spellNextBtn.x, spellNextBtn.y, spellNextBtn.w, spellNextBtn.h, 18);
+  ctx.font = 'bold 28px sans-serif';
+  ctx.fillText('听发音', leftX + btnW / 2, btnY + btnH / 2);
+
+  // 右侧：下一个
+  spellNextBtn = { x: rightX, y: btnY, w: btnW, h: btnH };
+  ctx.fillStyle = '#ff7a18';
+  roundRectPath(ctx, rightX, btnY, btnW, btnH, 18);
   ctx.fill();
   ctx.fillStyle = '#ffffff';
   ctx.font = 'bold 28px sans-serif';
-  ctx.fillText('下一个', spellNextBtn.x + btnW / 2, spellNextBtn.y + btnH / 2);
+  ctx.fillText('下一个', rightX + btnW / 2, btnY + btnH / 2);
 }
 
 function draw() {
@@ -1157,6 +1178,7 @@ wx.onTouchStart((e) => {
   } else if (state === 'spell') {
     if (hit(spellBackBtn, px, py)) { state = 'spellMode'; return; } // 返回模式选择页
     if (spellSolved) {
+      if (hit(spellDialogSpeakBtn, px, py)) { speakWord(spellWord); return; } // 答对弹框：再听一遍发音
       if (hit(spellNextBtn, px, py)) nextSpellWord(); // 答对弹框：下一个
       return;
     }
