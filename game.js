@@ -120,6 +120,10 @@ let spellBackBtn = null;         // 拼写页返回按钮（左上角）
 let spellSpeakerBtn = null;      // 拼写页小喇叭按钮（底部）
 let spellNextBtn = null;         // 答对弹框“下一个”按钮
 let spellTileRects = [];         // 候选字母方块的可点击区域（{x,y,w,h} 左上角）
+let spellChapterId = '';         // 当前选中的章节 id（模式选择页进入时用）
+let spellMode = 'listen';        // 拼写模式：'listen' 听音拼单词 / 'cn' 中文转单词
+let spellModeCards = [];         // 模式选择页两张卡片区域（{rect, mode}）
+let spellModeBackBtn = null;     // 模式选择页返回按钮（左上角）
 
 // ---- 流程控制 ----
 function startGame() {
@@ -231,10 +235,11 @@ function loadSpellWord(i) {
 }
 
 // 进入某章节的拼写练习
-function startSpellChapter(chapterId) {
+function startSpellChapter(chapterId, mode) {
   const ch = SPELL_CHAPTERS.find((c) => c.id === chapterId);
   if (!ch) return;
   spellChapterName = ch.name;
+  spellMode = (mode === 'cn') ? 'cn' : 'listen';   // 默认听音模式
   let words;
   if (chapterId === 'all') {
     // “全部章节”合并所有已开放单元（welcome/u1-u5）的单词；未开放单元仍置灰不会进来
@@ -251,10 +256,12 @@ function startSpellChapter(chapterId) {
   spellIndex = 0;
   loadSpellWord(0);
   state = 'spell';
-  // 进入时默认播放一遍（优先真实发音，回退逐字母拼读）。
+  // 进入时默认播放一遍（仅“听音拼单词”模式才自动发音；中文转单词模式靠看中文释义，不发音）。
   // 延迟约 350ms：刚从菜单切换过来，立即 play 在微信小游戏里偶尔会被静默丢弃，
   // 延迟可避开页面切换瞬间的渲染抢占，确保首个单词一定能出声。
-  setTimeout(() => { if (state === 'spell') speakWord(spellWord); }, 350);
+  if (spellMode === 'listen') {
+    setTimeout(() => { if (state === 'spell') speakWord(spellWord); }, 350);
+  }
 }
 
 // 切换到下一个单词；列表结束则返回二级菜单
@@ -266,9 +273,11 @@ function nextSpellWord() {
     return;
   }
   loadSpellWord(spellIndex);
-  // 切到下一个单词后自动播放一遍（优先真实发音，回退逐字母拼读），
+  // 切到下一个单词后自动播放一遍（仅听音模式；中文转单词模式靠看中文释义，不发音），
   // 延迟 ~350ms 避开弹框消失/页面切换瞬间的渲染抢占，确保一定能出声。
-  setTimeout(() => { if (state === 'spell') speakWord(spellWord); }, 350);
+  if (spellMode === 'listen') {
+    setTimeout(() => { if (state === 'spell') speakWord(spellWord); }, 350);
+  }
 }
 
 // 点击候选字母：已选则取消（从输入框移除），未选则追加到末尾；每次点击后判断是否拼对
@@ -286,7 +295,7 @@ function toggleCandidate(idx) {
   const input = spellOrder.map((i) => spellCandidates[i].ch).join('');
   if (input === spellWord) {
     spellSolved = true;
-    speakWord(spellWord); // 拼对后再播一遍真实发音强化记忆
+    if (spellMode === 'listen') speakWord(spellWord); // 仅听音模式在拼对后播一遍真实发音强化记忆
   }
 }
 
@@ -833,6 +842,43 @@ function drawChapter() {
   });
 }
 
+// 模式选择页：单元点击后先选“听音拼单词 / 中文转单词”再进入练习
+function drawSpellMode() {
+  ctx.fillStyle = bgGrad;
+  ctx.fillRect(0, 0, W, H);
+
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+
+  // 左上角返回按钮：回到章节选择
+  spellModeBackBtn = { x: 14, y: 14, w: 52, h: 40 };
+  drawBackButton(spellModeBackBtn);
+
+  // 标题
+  let titleSize = Math.min(40, W * 0.1);
+  ctx.font = 'bold ' + titleSize + 'px sans-serif';
+  ctx.fillStyle = '#5a2d00';
+  ctx.fillText('选择练习模式', W / 2, H * 0.2);
+
+  // 两张模式卡片（上下排布）
+  const cardW = Math.min(360, W - 80);
+  const cardH = 116;
+  const gap = 32;
+  const totalH = cardH * 2 + gap;
+  const startY = (H - totalH) / 2 + H * 0.02;
+
+  spellModeCards = [];
+  const modes = [
+    { mode: 'listen', title: '听音拼单词', sub: '听发音，拼出单词' },
+    { mode: 'cn', title: '中文转单词', sub: '看中文意思，拼出单词' },
+  ];
+  modes.forEach((m, i) => {
+    const rect = { x: W / 2 - cardW / 2, y: startY + i * (cardH + gap), w: cardW, h: cardH };
+    spellModeCards.push({ rect, mode: m.mode });
+    drawMenuCard(rect, m.title, m.sub, true);
+  });
+}
+
 // 拼单词练习页
 function drawSpell() {
   ctx.fillStyle = bgGrad;
@@ -841,7 +887,7 @@ function drawSpell() {
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
 
-  // 返回按钮（回到章节选择）
+  // 返回按钮（回到模式选择页）
   spellBackBtn = { x: 14, y: 14, w: 52, h: 40 };
   drawBackButton(spellBackBtn);
 
@@ -884,7 +930,8 @@ function drawSpell() {
   if (input.length === 0) {
     ctx.fillStyle = '#bbbbbb';
     ctx.font = (Math.min(20, boxW * 0.05)) + 'px ' + (SPELL_FONT || 'sans-serif');
-    ctx.fillText('点击下方字母，拼出听到的单词', W / 2, (lineY[1] + lineY[2]) / 2);
+    ctx.fillText(spellMode === 'cn' ? '根据中文意思，拼出单词'
+                                     : '点击下方字母，拼出听到的单词', W / 2, (lineY[1] + lineY[2]) / 2);
   } else {
     // 所有字母统一字号，以“书写基线”对齐四线格的基线 lineY[2]，按字体自身度量自然落位：
     // 中格字母正好落在中格、上伸字母自然上伸、下伸字母自然下伸，不会踩线。
@@ -943,9 +990,27 @@ function drawSpell() {
     drawSpellTile(x, y, size, c.ch, c.selected, i);
   });
 
-  // 底部小喇叭
-  spellSpeakerBtn = { x: W / 2 - 46, y: H - 104, w: 92, h: 92 };
-  drawSpeaker(spellSpeakerBtn);
+  // 底部区域：听音模式显示小喇叭（点击重听）；中文转单词模式显示中文释义（替代喇叭位置）
+  if (spellMode === 'listen') {
+    spellSpeakerBtn = { x: W / 2 - 46, y: H - 104, w: 92, h: 92 };
+    drawSpeaker(spellSpeakerBtn);
+  } else {
+    spellSpeakerBtn = null;
+    const zhW = Math.min(360, W - 80);
+    const zhH = 84;
+    const zhX = W / 2 - zhW / 2;
+    const zhY = H - 104;
+    ctx.fillStyle = 'rgba(255,255,255,0.97)';
+    roundRectPath(ctx, zhX, zhY, zhW, zhH, 20);
+    ctx.fill();
+    ctx.lineWidth = 2;
+    ctx.strokeStyle = 'rgba(255,122,24,0.5)';
+    roundRectPath(ctx, zhX, zhY, zhW, zhH, 20);
+    ctx.stroke();
+    ctx.fillStyle = '#5a2d00';
+    ctx.font = (Math.min(30, zhW * 0.075)) + 'px sans-serif';
+    ctx.fillText(spellMeaning, W / 2, zhY + zhH / 2);
+  }
 
   // 答对弹框
   if (spellSolved) drawSpellDialog();
@@ -998,6 +1063,7 @@ function draw() {
   else if (state === 'gameover') drawGameOver();
   else if (state === 'grade') drawGrade();
   else if (state === 'chapter') drawChapter();
+  else if (state === 'spellMode') drawSpellMode();
   else if (state === 'spell') drawSpell();
 }
 
@@ -1056,9 +1122,14 @@ wx.onTouchStart((e) => {
     if (hit(backBtn, px, py)) { state = 'grade'; return; }
     for (const item of chapterCards) {
       if (hit(item.rect, px, py)) {
-        if (item.enabled) startSpellChapter(item.id); // 未开放章节（置灰）点击不进入
+        if (item.enabled) { spellChapterId = item.id; state = 'spellMode'; } // 进入模式选择页
         return;
       }
+    }
+  } else if (state === 'spellMode') {
+    if (hit(spellModeBackBtn, px, py)) { state = 'chapter'; chapterScrollY = 0; return; }
+    for (const item of spellModeCards) {
+      if (hit(item.rect, px, py)) { startSpellChapter(spellChapterId, item.mode); return; }
     }
   } else if (state === 'home') {
     if (hit(backBtn, px, py)) { state = 'nav'; return; }
@@ -1084,12 +1155,12 @@ wx.onTouchStart((e) => {
       return;
     }
   } else if (state === 'spell') {
-    if (hit(spellBackBtn, px, py)) { state = 'chapter'; chapterScrollY = 0; return; }
+    if (hit(spellBackBtn, px, py)) { state = 'spellMode'; return; } // 返回模式选择页
     if (spellSolved) {
       if (hit(spellNextBtn, px, py)) nextSpellWord(); // 答对弹框：下一个
       return;
     }
-    if (hit(spellSpeakerBtn, px, py)) { speakWord(spellWord); return; } // 重听单词
+    if (spellSpeakerBtn && hit(spellSpeakerBtn, px, py)) { speakWord(spellWord); return; } // 重听单词（仅听音模式）
     for (const tile of spellTileRects) {
       if (hit(tile, px, py)) { toggleCandidate(tile.idx); return; }
     }
