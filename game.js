@@ -120,6 +120,14 @@ let spellBackBtn = null;         // 拼写页返回按钮（左上角）
 let spellSpeakerBtn = null;      // 拼写页小喇叭按钮（底部）
 let spellNextBtn = null;         // 答对弹框“下一个”按钮
 let spellDialogSpeakBtn = null;  // 答对弹框“听发音”按钮
+
+// 单词表（查阅）相关
+let wordListChapterId = '';      // 来自哪个章节（返回时用）
+let wordListName = '';           // 章节名（标题展示）
+let wordListItems = [];          // 单词列表：{ en, cn }
+let wordListScrollY = 0;         // 列表滚动偏移
+let wordListBackBtn = null;      // 返回按钮（左上角）
+let wordListSpeakers = [];       // 每行喇叭按钮：{ rect, word }
 let spellTileRects = [];         // 候选字母方块的可点击区域（{x,y,w,h} 左上角）
 let spellChapterId = '';         // 当前选中的章节 id（模式选择页进入时用）
 let spellMode = 'listen';        // 拼写模式：'listen' 听音拼单词 / 'cn' 中文转单词
@@ -263,6 +271,34 @@ function startSpellChapter(chapterId, mode) {
   if (spellMode === 'listen') {
     setTimeout(() => { if (state === 'spell') speakWord(spellWord); }, 350);
   }
+}
+
+// 进入某章节的“全部单词”查阅页：列出该单元下所有单词（中英文 + 小喇叭）
+function enterWordList(chapterId) {
+  const ch = SPELL_CHAPTERS.find((c) => c.id === chapterId);
+  if (!ch) return;
+  wordListChapterId = chapterId;
+  wordListName = ch.name;
+  let words;
+  if (chapterId === 'all') {
+    // “全部章节”合并所有已开放单元（与 startSpellChapter 实际合并范围一致）
+    words = [];
+    SPELL_OPEN.forEach((id) => {
+      const c = BOOK.chapters.find((x) => x.id === id);
+      if (c) words.push(...c.words);
+    });
+  } else {
+    words = ch.words;
+  }
+  // 去重（按英文小写），避免 welcome 与单元重复词反复出现；保留首次出现的中文
+  const seen = {};
+  wordListItems = [];
+  words.forEach((w) => {
+    const k = w.en.toLowerCase();
+    if (!seen[k]) { seen[k] = 1; wordListItems.push({ en: w.en, cn: w.cn }); }
+  });
+  wordListScrollY = 0;
+  state = 'wordList';
 }
 
 // 切换到下一个单词；列表结束则返回二级菜单
@@ -856,28 +892,98 @@ function drawSpellMode() {
   drawBackButton(spellModeBackBtn);
 
   // 标题
-  let titleSize = Math.min(40, W * 0.1);
+  let titleSize = Math.min(36, W * 0.095);
   ctx.font = 'bold ' + titleSize + 'px sans-serif';
   ctx.fillStyle = '#5a2d00';
-  ctx.fillText('选择练习模式', W / 2, H * 0.2);
+  ctx.fillText('选择练习模式', W / 2, H * 0.15);
 
-  // 两张模式卡片（上下排布）
+  // 模式卡片（上下排布，含“全部单词”查阅入口）
   const cardW = Math.min(360, W - 80);
-  const cardH = 116;
-  const gap = 32;
-  const totalH = cardH * 2 + gap;
-  const startY = (H - totalH) / 2 + H * 0.02;
-
-  spellModeCards = [];
+  const cardH = 100;
+  const gap = 22;
   const modes = [
     { mode: 'listen', title: '听音拼单词', sub: '听发音，拼出单词' },
     { mode: 'cn', title: '中文转单词', sub: '看中文意思，拼出单词' },
+    { mode: 'words', title: '全部单词', sub: '浏览本单元所有单词' },
   ];
+  const n = modes.length;
+  const totalH = cardH * n + gap * (n - 1);
+  const startY = Math.max(H * 0.22, (H - totalH) / 2);
+
+  spellModeCards = [];
   modes.forEach((m, i) => {
     const rect = { x: W / 2 - cardW / 2, y: startY + i * (cardH + gap), w: cardW, h: cardH };
     spellModeCards.push({ rect, mode: m.mode });
     drawMenuCard(rect, m.title, m.sub, true);
   });
+}
+
+// 单词表查阅页：列出该单元（或全部章节）下的所有单词，提供中英文与发音喇叭
+function drawWordList() {
+  ctx.fillStyle = bgGrad;
+  ctx.fillRect(0, 0, W, H);
+
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+
+  // 返回按钮（回到模式选择页）
+  wordListBackBtn = { x: 14, y: 14, w: 52, h: 40 };
+  drawBackButton(wordListBackBtn);
+
+  // 标题
+  ctx.fillStyle = '#5a2d00';
+  ctx.font = 'bold ' + Math.min(30, W * 0.08) + 'px sans-serif';
+  ctx.fillText(wordListName + ' · 全部单词', W / 2, H * 0.09);
+
+  // 列表区域（与 onTouchMove 滚动参数保持一致）
+  const listTop = Math.round(H * 0.18);
+  const listBottom = H - 20;
+  const listH = listBottom - listTop;
+  const rowH = 60, gap = 8;
+  const contentH = wordListItems.length * (rowH + gap);
+  const maxScroll = Math.max(0, contentH - listH);
+  if (wordListScrollY > maxScroll) wordListScrollY = maxScroll;
+
+  wordListSpeakers = [];
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(0, listTop, W, listH);
+  ctx.clip();
+
+  wordListItems.forEach((it, i) => {
+    const y = listTop + i * (rowH + gap) - wordListScrollY;
+    if (y + rowH < listTop || y > listBottom) return; // 不可见行跳过
+    const rx = 16, rw = W - 32;
+    // 行背景卡片
+    ctx.fillStyle = 'rgba(255,255,255,0.95)';
+    roundRectPath(ctx, rx, y, rw, rowH, 14);
+    ctx.fill();
+    // 英文（粗体）
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'middle';
+    ctx.fillStyle = '#2e7d32';
+    ctx.font = 'bold 24px sans-serif';
+    ctx.fillText(it.en, rx + 16, y + 22);
+    // 中文释义（小一号）
+    ctx.fillStyle = '#8a5a2b';
+    ctx.font = '18px sans-serif';
+    ctx.fillText(it.cn, rx + 16, y + 43);
+    // 右侧小喇叭：点击播放真实发音
+    const spSize = 40;
+    const spRect = { x: W - 16 - spSize, y: y + (rowH - spSize) / 2, w: spSize, h: spSize };
+    drawSpeaker(spRect);
+    wordListSpeakers.push({ rect: spRect, word: it.en.toLowerCase() });
+  });
+
+  ctx.restore();
+
+  // 滚动到底提示
+  if (maxScroll > 0) {
+    ctx.textAlign = 'center';
+    ctx.fillStyle = 'rgba(138,90,43,0.6)';
+    ctx.font = '14px sans-serif';
+    ctx.fillText('上滑查看更多', W / 2, H - 8);
+  }
 }
 
 // 拼单词练习页
@@ -1086,6 +1192,7 @@ function draw() {
   else if (state === 'chapter') drawChapter();
   else if (state === 'spellMode') drawSpellMode();
   else if (state === 'spell') drawSpell();
+  else if (state === 'wordList') drawWordList();
 }
 
 // 小游戏渲染循环：优先用 canvas.requestAnimationFrame（Canvas 2D 节点方法，官方推荐）
@@ -1150,7 +1257,16 @@ wx.onTouchStart((e) => {
   } else if (state === 'spellMode') {
     if (hit(spellModeBackBtn, px, py)) { state = 'chapter'; chapterScrollY = 0; return; }
     for (const item of spellModeCards) {
-      if (hit(item.rect, px, py)) { startSpellChapter(spellChapterId, item.mode); return; }
+      if (hit(item.rect, px, py)) {
+        if (item.mode === 'words') enterWordList(spellChapterId);
+        else startSpellChapter(spellChapterId, item.mode);
+        return;
+      }
+    }
+  } else if (state === 'wordList') {
+    if (hit(wordListBackBtn, px, py)) { state = 'spellMode'; return; }
+    for (const sp of wordListSpeakers) {
+      if (hit(sp.rect, px, py)) { speakWord(sp.word); return; }
     }
   } else if (state === 'home') {
     if (hit(backBtn, px, py)) { state = 'nav'; return; }
@@ -1191,19 +1307,31 @@ wx.onTouchStart((e) => {
 
 // 章节列表上下拖动滚动（仅 chapter 状态生效）
 wx.onTouchMove((e) => {
-  if (state !== 'chapter') { lastTouchY = null; return; }
+  if (state !== 'chapter' && state !== 'wordList') { lastTouchY = null; return; }
   const p = getPoint(e);
   if (!p) return;
   if (lastTouchY !== null) {
     const dy = p.y - lastTouchY;
-    chapterScrollY -= dy;
-    const startY = Math.round(H * 0.22);
-    const rowH = 72, gap = 16;
-    const listH = (H - 24) - startY;
-    const contentH = SPELL_CHAPTERS.length * (rowH + gap);
-    const maxScroll = Math.max(0, contentH - listH);
-    if (chapterScrollY < 0) chapterScrollY = 0;
-    if (chapterScrollY > maxScroll) chapterScrollY = maxScroll;
+    if (state === 'chapter') {
+      chapterScrollY -= dy;
+      const startY = Math.round(H * 0.22);
+      const rowH = 72, gap = 16;
+      const listH = (H - 24) - startY;
+      const contentH = SPELL_CHAPTERS.length * (rowH + gap);
+      const maxScroll = Math.max(0, contentH - listH);
+      if (chapterScrollY < 0) chapterScrollY = 0;
+      if (chapterScrollY > maxScroll) chapterScrollY = maxScroll;
+    } else { // wordList
+      wordListScrollY -= dy;
+      const listTop = Math.round(H * 0.18);
+      const listBottom = H - 20;
+      const listH = listBottom - listTop;
+      const rowH = 60, gap = 8;
+      const contentH = wordListItems.length * (rowH + gap);
+      const maxScroll = Math.max(0, contentH - listH);
+      if (wordListScrollY < 0) wordListScrollY = 0;
+      if (wordListScrollY > maxScroll) wordListScrollY = maxScroll;
+    }
   }
   lastTouchY = p.y;
 });
