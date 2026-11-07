@@ -4,7 +4,7 @@
 用 edge-tts（微软在线 TTS）为英语单词生成真实发音 mp3，并尽量压缩。
 
 输出：assets/audio/words/<word>.mp3  （小写、去空格命名）
-格式：audio-16khz-32kbitrate-mp3  （16kHz 单声道，约 32kbps，体积最小且清晰）
+格式：MPEG-1 Layer3，44100Hz 单声道，64kbps（iOS/安卓均兼容；原 16kHz/32k 的 MPEG-2 低采样率 mp3 在 iOS 上无法播放）
 
 用法：
   python3 tools/gen_words_audio.py            # 仅生成 Welcome unit
@@ -73,7 +73,7 @@ def norm(w):
 
 
 async def gen_one(text, out_path):
-    """TTS 生成后，用 ffmpeg 重编码为 16kHz 单声道 32kbps mp3 以尽量压缩。"""
+    """TTS 生成后，用 ffmpeg 重编码为 44100Hz 单声道 64kbps 的 MPEG-1 mp3（iOS/安卓均兼容）。"""
     ffmpeg = get_ffmpeg()
     if not ffmpeg:
         # 无 ffmpeg 时退化为直接使用 edge-tts 默认输出
@@ -86,7 +86,7 @@ async def gen_one(text, out_path):
     await comm.save(tmp)
     cmd = [
         ffmpeg, "-y", "-i", tmp,
-        "-ar", "16000", "-ac", "1", "-b:a", "32k",
+        "-ar", "44100", "-ac", "1", "-b:a", "64k",
         "-codec:a", "libmp3lame", out_path
     ]
     subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL,

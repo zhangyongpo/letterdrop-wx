@@ -7,7 +7,7 @@ const {
   LETTERS, GROUP_SIZE, COLS, MAX_TARGET_COUNT, GROUPS_PER_LEVEL,
   MAX_LIVES, CORRECT_SCORE, WRONG_PENALTY, speedForLevel
 } = require('./config/gameConfig');
-const { announceLetter, announceWord, speakWord } = require('./utils/audio');
+const { announceLetter, announceWord, speakWord, unlockAudio } = require('./utils/audio');
 
 // 英文印刷体（Andika，SIL 出品，OFL 开源可商用），专为初学者识字设计，字母形态清晰规范，
 // 小写 a/g 为课本标准双体结构，最贴近小学英语书写印刷体。用于拼单词页。
@@ -26,6 +26,9 @@ const SPELL_OPEN = ['welcome', 'u1', 'u2', 'u3', 'u4', 'u5'];
 
 // 字母徽标配色（彩色圆角方块，白字）
 const LETTER_COLORS = ['#ff7a18', '#ff5252', '#42a5f5', '#66bb6a', '#ab47bc', '#ffca28', '#26c6da', '#ec407a'];
+
+// iOS 音频会话解锁标记：首次用户触摸时激活，确保后续异步报音（字母掉落/拼词）在 iOS 出声
+let touchUnlocked = false;
 
 // 绘制圆角矩形路径（兼容各基础库，不依赖 ctx.roundRect）
 function roundRectPath(ctx, x, y, w, h, r) {
@@ -1239,6 +1242,17 @@ wx.onTouchStart((e) => {
   const p = getPoint(e);
   if (!p) return;
   const px = p.x, py = p.y;
+
+  // iOS 音频解锁：首次触摸时激活 AudioSession（高版本 iOS 必须，否则异步报音被静默），
+  // 并全局关闭静音开关，避免 iPhone 静音键/系统策略导致无声音。
+  if (!touchUnlocked) {
+    touchUnlocked = true;
+    if (wx.setInnerAudioOption) {
+      try { wx.setInnerAudioOption({ obeyMuteSwitch: false, mixWithOther: true }); } catch (e) {}
+    }
+    unlockAudio();
+  }
+
   if (state === 'nav') {
     // 找字母：进入原首页（主页）；拼单词：进入年级选择
     if (hit(navFindBtn, px, py)) { state = 'home'; return; }

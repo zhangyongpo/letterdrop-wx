@@ -121,4 +121,25 @@ function speakWord(word) {
   }
 }
 
-module.exports = { speakLetter, announceLetter, announceWord, speakWord };
+// iOS 微信小游戏（尤其高版本 iOS / 新版微信）要求音频的“首次播放”必须在用户手势链内触发，
+// 否则会被系统静默拦截——表现为低版本 iOS 能出声、高版本 iOS 完全没声、安卓正常。
+// 在首次用户触摸时真实播放一次并按住（onPlay 立刻停止，几乎无声），激活 AudioSession，
+// 之后所有异步报音（字母掉落自动报音、切页后自动发音）才能正常出声。
+let audioUnlocked = false;
+function unlockAudio() {
+  if (audioUnlocked) return;
+  audioUnlocked = true; // 只在首次用户手势内调用一次
+  try {
+    const c = wx.createInnerAudioContext();
+    c.src = '/assets/audio/A.mp3';
+    c.obeyMuteSwitch = false;
+    // 真实播放一次以激活 iOS AudioSession；拿到 onPlay 立即停，几乎听不到，
+    // 但足以让系统音频会话进入“已激活”状态，后续异步 play 不再被拦截。
+    c.onPlay(() => { try { c.stop(); } catch (e) {} });
+    c.onError(() => { try { c.destroy(); } catch (e) {} });
+    c.play();
+    setTimeout(() => { try { c.destroy(); } catch (e) {} }, 400); // 兜底释放
+  } catch (e) {}
+}
+
+module.exports = { speakLetter, announceLetter, announceWord, speakWord, unlockAudio };
