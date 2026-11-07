@@ -137,6 +137,16 @@ let spellMode = 'listen';        // 拼写模式：'listen' 听音拼单词 / 'c
 let spellModeCards = [];         // 模式选择页两张卡片区域（{rect, mode}）
 let spellModeBackBtn = null;     // 模式选择页返回按钮（左上角）
 
+// ---- 单词对对碰（match）相关状态 ----
+let matchBlocks = [];            // 棋盘块：{x,y,w,h,text,type:'en'|'cn',pairId,removed}
+let matchCols = 0, matchRows = 0;
+let matchSel = null;             // 当前选中的块（等待第二块）
+let matchDone = false;           // 是否全部消除
+let matchMsg = '';               // 临时提示（如“不匹配”）
+let matchMsgTimer = 0;           // 提示剩余显示时间(ms)
+let matchBackBtn = null;         // 返回按钮（左上角）
+let matchChapterName = '';       // 章节名（标题展示）
+
 // ---- 流程控制 ----
 function startGame() {
   if (groupTimer) clearTimeout(groupTimer);
@@ -900,24 +910,27 @@ function drawSpellMode() {
   ctx.fillStyle = '#5a2d00';
   ctx.fillText('选择练习模式', W / 2, H * 0.15);
 
-  // 模式卡片（上下排布，含“全部单词”查阅入口）
+  // 模式卡片（上下排布：听音拼单词 / 中文转单词 / 全部单词 / 单词对对碰）
   const cardW = Math.min(360, W - 80);
-  const cardH = 100;
-  const gap = 22;
   const modes = [
     { mode: 'listen', title: '听音拼单词', sub: '听发音，拼出单词' },
     { mode: 'cn', title: '中文转单词', sub: '看中文意思，拼出单词' },
     { mode: 'words', title: '全部单词', sub: '浏览本单元所有单词' },
+    { mode: 'match', title: '单词对对碰', sub: '点击英文与中文配对消除' },
   ];
   const n = modes.length;
-  const totalH = cardH * n + gap * (n - 1);
-  const startY = Math.max(H * 0.22, (H - totalH) / 2);
+  // 卡片高度自适应：保证从标题区下到屏幕底能完整放下 n 张（不溢出小屏）
+  const topY = H * 0.22;
+  const bottomPad = 20;
+  const gap = 16;
+  const cardH = Math.max(72, Math.min(96, (H - topY - bottomPad - gap * (n - 1)) / n));
+  const startY = topY;
 
   spellModeCards = [];
   modes.forEach((m, i) => {
     const rect = { x: W / 2 - cardW / 2, y: startY + i * (cardH + gap), w: cardW, h: cardH };
     spellModeCards.push({ rect, mode: m.mode });
-    drawMenuCard(rect, m.title, m.sub, true);
+    drawMenuCard(rect, m.title, m.sub, true, Math.min(32, cardH * 0.34));
   });
 }
 
@@ -986,6 +999,205 @@ function drawWordList() {
     ctx.fillStyle = 'rgba(138,90,43,0.6)';
     ctx.font = '14px sans-serif';
     ctx.fillText('上滑查看更多', W / 2, H - 8);
+  }
+}
+
+// 获取某章节单词（去重 + 过滤含空格短语），返回 [{en,cn}]
+function getChapterWordsPlain(chapterId) {
+  let words;
+  if (chapterId === 'all') {
+    words = [];
+    SPELL_OPEN.forEach((id) => {
+      const c = BOOK.chapters.find((x) => x.id === id);
+      if (c) words.push(...c.words);
+    });
+  } else {
+    const ch = SPELL_CHAPTERS.find((c) => c.id === chapterId);
+    words = ch ? ch.words : [];
+  }
+  const seen = new Set();
+  const res = [];
+  words.forEach((w) => {
+    const en = (w.en || '').trim();
+    if (!en || /\s/.test(en)) return;            // 跳过含空格短语（不适合单块展示）
+    const key = en.toLowerCase();
+    if (seen.has(key)) return;
+    seen.add(key);
+    res.push({ en, cn: w.cn || '' });
+  });
+  return res;
+}
+
+// 进入“单词对对碰”：根据屏幕尺寸自动计算能铺满的网格，随机取词，生成英文/中文块
+function startMatch(chapterId) {
+  const ch = SPELL_CHAPTERS.find((c) => c.id === chapterId);
+  matchChapterName = ch ? ch.name : '';
+  const words = getChapterWordsPlain(chapterId);
+  if (words.length === 0) { state = 'spellMode'; return; }
+
+  const gap = 10;                                // 块间距
+  const padX = 12;                               // 棋盘左右边距
+  const padTop = Math.round(H * 0.16);           // 顶部标题区高度
+  const padBottom = 16;
+  const boardW = W - padX * 2;
+  const boardH = H - padTop - padBottom;
+
+  // 枚举 cols，选出块尺寸最合理的布局（cells 必须为偶数：每对 2 块）
+  let best = null;
+  for (let cols = 3; cols <= 5; cols++) {
+    const cw = (boardW - (cols + 1) * gap) / cols;
+    if (cw < 56) continue;
+    let chh = Math.max(54, Math.min(96, cw * 0.62));
+    let rows = Math.floor((boardH - gap) / (chh + gap));
+    if (rows < 3) continue;
+    if ((cols * rows) % 2 !== 0) rows -= 1;      // 保持偶数 cells
+    if (rows < 3) continue;
+    const cells = cols * rows;
+    const ccw = (boardW - (cols + 1) * gap) / cols;
+    const cch = (boardH - (rows + 1) * gap) / rows;
+    const score = -Math.abs(cch - 74) - Math.abs(ccw - 120) * 0.4;
+    if (!best || score > best.score) best = { cols, rows, cellW: ccw, cellH: cch, score, cells };
+  }
+  if (!best) best = { cols: 3, rows: 6, cellW: (boardW - 40) / 3, cellH: (boardH - 70) / 6, cells: 18 };
+
+  matchCols = best.cols;
+  // 需要的单词对数 = cells/2，但受词库大小限制；最终让网格格子数恰好 = 2*need
+  let need = Math.min(best.cells / 2, words.length);
+  let cells = need * 2;
+  let rows = Math.floor(cells / matchCols);
+  if ((matchCols * rows) % 2 !== 0) rows -= 1;
+  if (rows < 1) rows = 1;
+  matchRows = rows;
+  cells = matchCols * matchRows;
+  need = cells / 2;
+
+  // 随机抽取 need 个单词（每次进入随机）
+  const chosen = shuffled(words).slice(0, need);
+
+  // 生成 2*need 个块（英文 + 中文），打乱后填入网格
+  const blocks = [];
+  chosen.forEach((w, i) => {
+    blocks.push({ text: w.en, type: 'en', pairId: i });
+    blocks.push({ text: w.cn, type: 'cn', pairId: i });
+  });
+  const sh = shuffled(blocks);
+
+  // 精确铺满坐标（水平/垂直都贴边填满，无空隙）
+  const cw = (boardW - (matchCols + 1) * gap) / matchCols;
+  const chh = (boardH - (matchRows + 1) * gap) / matchRows;
+  matchBlocks = [];
+  for (let r = 0; r < matchRows; r++) {
+    for (let c = 0; c < matchCols; c++) {
+      const idx = r * matchCols + c;
+      const b = sh[idx];
+      if (!b) continue;
+      b.x = padX + gap + c * (cw + gap);
+      b.y = padTop + gap + r * (chh + gap);
+      b.w = cw; b.h = chh; b.removed = false;
+      matchBlocks.push(b);
+    }
+  }
+  matchSel = null;
+  matchDone = false;
+  matchMsg = '';
+  matchMsgTimer = 0;
+  state = 'match';
+}
+
+// 单词对对碰：渲染棋盘
+function drawMatch() {
+  ctx.fillStyle = bgGrad;
+  ctx.fillRect(0, 0, W, H);
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+
+  // 返回按钮（回到模式选择页）
+  matchBackBtn = { x: 14, y: 14, w: 52, h: 40 };
+  drawBackButton(matchBackBtn);
+
+  // 标题
+  ctx.fillStyle = '#5a2d00';
+  ctx.font = 'bold ' + Math.min(30, W * 0.08) + 'px sans-serif';
+  ctx.fillText('单词对对碰', W / 2, Math.round(H * 0.07));
+  ctx.font = '13px sans-serif';
+  ctx.fillStyle = 'rgba(138,90,43,0.75)';
+  ctx.fillText('点击英文卡与中文卡配对，消除全部卡片', W / 2, Math.round(H * 0.115));
+
+  // 块
+  for (const b of matchBlocks) {
+    if (b.removed) continue;
+    drawMatchBlock(b);
+  }
+
+  // 完成态
+  if (matchDone) {
+    ctx.save();
+    ctx.fillStyle = 'rgba(255,255,255,0.82)';
+    ctx.fillRect(0, 0, W, H);
+    ctx.fillStyle = '#2e7d32';
+    ctx.font = 'bold 38px sans-serif';
+    ctx.fillText('全部消除！', W / 2, H / 2 - 22);
+    ctx.fillStyle = '#8a5a2b';
+    ctx.font = '18px sans-serif';
+    ctx.fillText('点击任意处返回', W / 2, H / 2 + 24);
+    ctx.restore();
+  } else if (matchMsgTimer > 0) {
+    ctx.fillStyle = '#e53935';
+    ctx.font = 'bold 17px sans-serif';
+    ctx.fillText(matchMsg, W / 2, H - 22);
+  }
+}
+
+// 渲染单个块（英文浅蓝、中文浅橙；选中高亮）
+function drawMatchBlock(b) {
+  const r = Math.min(18, b.w * 0.1, b.h * 0.1);
+  const isSel = (matchSel === b);
+  ctx.fillStyle = b.type === 'en' ? '#e3f2fd' : '#fff3e0';
+  roundRectPath(ctx, b.x, b.y, b.w, b.h, r);
+  ctx.fill();
+  ctx.lineWidth = isSel ? 4 : 2;
+  ctx.strokeStyle = isSel
+    ? '#ff7a18'
+    : (b.type === 'en' ? 'rgba(21,101,192,0.55)' : 'rgba(138,90,43,0.55)');
+  roundRectPath(ctx, b.x, b.y, b.w, b.h, r);
+  ctx.stroke();
+
+  const pad = 8;
+  const maxW = b.w - pad * 2;
+  if (b.type === 'en') {
+    ctx.fillStyle = '#1565c0';
+    let fs = Math.min(b.h * 0.42, 40);
+    const fam = (SPELL_FONT || 'sans-serif');
+    ctx.font = 'bold ' + fs + 'px ' + fam;
+    while (ctx.measureText(b.text).width > maxW && fs > 10) {
+      fs -= 1; ctx.font = 'bold ' + fs + 'px ' + fam;
+    }
+    ctx.fillText(b.text, b.x + b.w / 2, b.y + b.h / 2);
+  } else {
+    ctx.fillStyle = '#8a5a2b';
+    let fs = Math.min(b.h * 0.44, 36);
+    ctx.font = fs + 'px sans-serif';
+    while (ctx.measureText(b.text).width > maxW && fs > 10) {
+      fs -= 1; ctx.font = fs + 'px sans-serif';
+    }
+    ctx.fillText(b.text, b.x + b.w / 2, b.y + b.h / 2);
+  }
+}
+
+// 点击某块的处理：选中 -> 再点配对
+function onMatchTap(b) {
+  if (!matchSel) { matchSel = b; return; }
+  if (matchSel === b) { matchSel = null; return; }   // 再次点同一块则取消
+  const a = matchSel;
+  if (a.type !== b.type && a.pairId === b.pairId) {
+    a.removed = true; b.removed = true;
+    matchSel = null;
+    matchMsg = ''; matchMsgTimer = 0;
+    if (matchBlocks.every((x) => x.removed)) matchDone = true;
+  } else {
+    matchSel = null;
+    matchMsg = '不匹配，再试试～';
+    matchMsgTimer = 1100;
   }
 }
 
@@ -1196,6 +1408,7 @@ function draw() {
   else if (state === 'spellMode') drawSpellMode();
   else if (state === 'spell') drawSpell();
   else if (state === 'wordList') drawWordList();
+  else if (state === 'match') drawMatch();
 }
 
 // 小游戏渲染循环：优先用 canvas.requestAnimationFrame（Canvas 2D 节点方法，官方推荐）
@@ -1219,6 +1432,7 @@ function loop() {
   const dt = Math.min(now - lastTime, 50); // 防止后台切回时巨跳
   lastTime = now;
   if (scoreBumpTimer > 0) scoreBumpTimer -= dt;
+  if (matchMsgTimer > 0) matchMsgTimer -= dt;
   update(dt);
   draw();
   raf(loop);
@@ -1273,9 +1487,17 @@ wx.onTouchStart((e) => {
     for (const item of spellModeCards) {
       if (hit(item.rect, px, py)) {
         if (item.mode === 'words') enterWordList(spellChapterId);
+        else if (item.mode === 'match') startMatch(spellChapterId);
         else startSpellChapter(spellChapterId, item.mode);
         return;
       }
+    }
+  } else if (state === 'match') {
+    if (hit(matchBackBtn, px, py)) { state = 'spellMode'; return; }
+    if (matchDone) { state = 'spellMode'; return; }   // 完成态点任意处返回
+    for (const b of matchBlocks) {
+      if (b.removed) continue;
+      if (hit(b, px, py)) { onMatchTap(b); return; }
     }
   } else if (state === 'wordList') {
     if (hit(wordListBackBtn, px, py)) { state = 'spellMode'; return; }
