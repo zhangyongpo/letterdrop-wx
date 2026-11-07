@@ -146,6 +146,9 @@ let matchMsg = '';               // 临时提示（如“不匹配”）
 let matchMsgTimer = 0;           // 提示剩余显示时间(ms)
 let matchBackBtn = null;         // 返回按钮（左上角）
 let matchChapterName = '';       // 章节名（标题展示）
+let FLIP_DUR = 380;              // 配对成功翻转消失动画时长(ms)
+// 对对碰块字号/内边距（测量宽度与绘制共用，保证宽度自适应下字体大小一致）
+const MATCH_EN_FS = 30, MATCH_CN_FS = 28, MATCH_PAD = 14;
 
 // ---- 流程控制 ----
 function startGame() {
@@ -1035,67 +1038,82 @@ function startMatch(chapterId) {
   const words = getChapterWordsPlain(chapterId);
   if (words.length === 0) { state = 'spellMode'; return; }
 
-  const gap = 10;                                // 块间距
-  const padX = 12;                               // 棋盘左右边距
+  const padX = 14;
   const padTop = Math.round(H * 0.16);           // 顶部标题区高度
-  const padBottom = 16;
-  const boardW = W - padX * 2;
-  const boardH = H - padTop - padBottom;
+  const padBottom = 18;
+  const gap = 10;                                // 块最小间距
+  const availW = W - padX * 2;
+  const availH = H - padTop - padBottom;
+  const enFam = SPELL_FONT || 'sans-serif';
 
-  // 枚举 cols，选出块尺寸最合理的布局（cells 必须为偶数：每对 2 块）
-  let best = null;
-  for (let cols = 3; cols <= 5; cols++) {
-    const cw = (boardW - (cols + 1) * gap) / cols;
-    if (cw < 56) continue;
-    let chh = Math.max(54, Math.min(96, cw * 0.62));
-    let rows = Math.floor((boardH - gap) / (chh + gap));
-    if (rows < 3) continue;
-    if ((cols * rows) % 2 !== 0) rows -= 1;      // 保持偶数 cells
-    if (rows < 3) continue;
-    const cells = cols * rows;
-    const ccw = (boardW - (cols + 1) * gap) / cols;
-    const cch = (boardH - (rows + 1) * gap) / rows;
-    const score = -Math.abs(cch - 74) - Math.abs(ccw - 120) * 0.4;
-    if (!best || score > best.score) best = { cols, rows, cellW: ccw, cellH: cch, score, cells };
+  // 按内容自适应估算单块宽度：宽块配宽字，字体大小差异大幅减小
+  function blockW(text, type) {
+    ctx.font = (type === 'en' ? 'bold ' + MATCH_EN_FS + 'px ' : MATCH_CN_FS + 'px ') +
+      (type === 'en' ? enFam : 'sans-serif');
+    const w = ctx.measureText(text).width + MATCH_PAD * 2;
+    return Math.max(54, Math.min(W * 0.46, w));
   }
-  if (!best) best = { cols: 3, rows: 6, cellW: (boardW - 40) / 3, cellH: (boardH - 70) / 6, cells: 18 };
 
-  matchCols = best.cols;
-  // 需要的单词对数 = cells/2，但受词库大小限制；最终让网格格子数恰好 = 2*need
-  let need = Math.min(best.cells / 2, words.length);
-  let cells = need * 2;
-  let rows = Math.floor(cells / matchCols);
-  if ((matchCols * rows) % 2 !== 0) rows -= 1;
-  if (rows < 1) rows = 1;
-  matchRows = rows;
-  cells = matchCols * matchRows;
-  need = cells / 2;
+  // 流式换行布局 + 行高铺满垂直方向
+  function layout(blocks) {
+    blocks.forEach((b) => { b._w = blockW(b.text, b.type); });
+    const rows = [];
+    let cur = [];
+    let curW = 0;
+    for (const b of blocks) {
+      const add = cur.length === 0 ? b._w : b._w + gap;
+      if (curW + add > availW && cur.length > 0) { rows.push(cur); cur = []; curW = 0; }
+      cur.push(b);
+      curW += (cur.length === 1 ? b._w : b._w + gap);
+    }
+    if (cur.length) rows.push(cur);
+    const rowH = (availH - gap * (rows.length - 1)) / rows.length;
+    return { rows, rowH };
+  }
 
-  // 随机抽取 need 个单词（每次进入随机）
-  const chosen = shuffled(words).slice(0, need);
+  // 随机选词 + 自适应单词对数（行高保持在合理范围）
+  let need = Math.min(words.length, 14);
+  let rows = [], rowH = 0;
+  for (let attempt = 0; attempt < 6; attempt++) {
+    const chosen = shuffled(words).slice(0, need);
+    const blocks = [];
+    chosen.forEach((w, i) => {
+      blocks.push({ text: w.en, type: 'en', pairId: i });
+      blocks.push({ text: w.cn, type: 'cn', pairId: i });
+    });
+    const sh = shuffled(blocks);
+    const res = layout(sh);
+    rows = res.rows; rowH = res.rowH;
+    if (rowH < 44) { need = Math.max(4, Math.floor(need * 0.7)); continue; }
+    if (rowH > 120 && need < words.length) { need = Math.min(words.length, need + 3); continue; }
+    break;
+  }
+  matchCols = 0;
+  matchRows = rows.length;
 
-  // 生成 2*need 个块（英文 + 中文），打乱后填入网格
-  const blocks = [];
-  chosen.forEach((w, i) => {
-    blocks.push({ text: w.en, type: 'en', pairId: i });
-    blocks.push({ text: w.cn, type: 'cn', pairId: i });
-  });
-  const sh = shuffled(blocks);
-
-  // 精确铺满坐标（水平/垂直都贴边填满，无空隙）
-  const cw = (boardW - (matchCols + 1) * gap) / matchCols;
-  const chh = (boardH - (matchRows + 1) * gap) / matchRows;
+  // 计算坐标：每行水平铺满（间距自适应补齐），垂直按行高分布
   matchBlocks = [];
-  for (let r = 0; r < matchRows; r++) {
-    for (let c = 0; c < matchCols; c++) {
-      const idx = r * matchCols + c;
-      const b = sh[idx];
-      if (!b) continue;
-      b.x = padX + gap + c * (cw + gap);
-      b.y = padTop + gap + r * (chh + gap);
-      b.w = cw; b.h = chh; b.removed = false;
+  let y = padTop;
+  for (const row of rows) {
+    const sumW = row.reduce((s, b) => s + b._w, 0);
+    if (row.length > 1) {
+      // 剩余空间平分到各间隔（已含基础 gap），使整行左右贴边
+      const extra = Math.max(0, (availW - sumW - gap * (row.length - 1)) / (row.length - 1));
+      let x = padX;
+      for (const b of row) {
+        b.x = x; b.y = y; b.w = b._w; b.h = rowH;
+        b.removed = false; b.flip = -1;
+        matchBlocks.push(b);
+        x += b._w + gap + extra;
+      }
+    } else {
+      const b = row[0];
+      b.x = padX + (availW - sumW) / 2;   // 单行单块时居中
+      b.y = y; b.w = b._w; b.h = rowH;
+      b.removed = false; b.flip = -1;
       matchBlocks.push(b);
     }
+    y += rowH + gap;
   }
   matchSel = null;
   matchDone = false;
@@ -1148,13 +1166,52 @@ function drawMatch() {
   }
 }
 
-// 渲染单个块（英文浅蓝、中文浅橙；选中高亮）
+// 颜色插值（用于翻转时原色 -> 成功绿）
+function hexToRgb(h) {
+  h = h.replace('#', '');
+  return [parseInt(h.substr(0, 2), 16), parseInt(h.substr(2, 2), 16), parseInt(h.substr(4, 2), 16)];
+}
+function lerpColor(a, b, t) {
+  t = Math.max(0, Math.min(1, t));
+  const pa = hexToRgb(a), pb = hexToRgb(b);
+  const r = Math.round(pa[0] + (pb[0] - pa[0]) * t);
+  const g = Math.round(pa[1] + (pb[1] - pa[1]) * t);
+  const bl = Math.round(pa[2] + (pb[2] - pa[2]) * t);
+  return 'rgb(' + r + ',' + g + ',' + bl + ')';
+}
+
+// 渲染单个块（英文浅蓝、中文浅橙；选中高亮；配对成功翻转消失）
 function drawMatchBlock(b) {
-  const r = Math.min(18, b.w * 0.1, b.h * 0.1);
-  const isSel = (matchSel === b);
-  ctx.fillStyle = b.type === 'en' ? '#e3f2fd' : '#fff3e0';
+  const r = Math.min(18, b.w * 0.12, b.h * 0.12);
+  const flipping = (b.flip !== undefined && b.flip >= 0 && !b.removed);
+  let sx = 1, alpha = 1, showFront = true;
+  let bg = b.type === 'en' ? '#e3f2fd' : '#fff3e0';
+  if (flipping) {
+    const t = b.flip / FLIP_DUR;
+    if (t < 0.5) {
+      sx = 1 - 2 * t;                                   // 1 -> 0（翻到侧面）
+      bg = lerpColor(b.type === 'en' ? '#e3f2fd' : '#fff3e0', '#2e7d32', t * 2);
+    } else {
+      sx = -(2 * t - 1);                                // 0 -> -1（翻到背面）
+      alpha = Math.max(0, 1 - (t - 0.5) * 2);           // 1 -> 0（淡出）
+      bg = '#2e7d32';
+      showFront = false;                                // 背面显示对勾，不显示原文字
+    }
+  }
+  const isSel = (matchSel === b) && !flipping;
+  ctx.save();
+  ctx.globalAlpha = alpha;
+  if (sx !== 1) {
+    const cx = b.x + b.w / 2, cy = b.y + b.h / 2;
+    ctx.translate(cx, cy);
+    ctx.scale(sx, 1);
+    ctx.translate(-cx, -cy);
+  }
+  // 背景
+  ctx.fillStyle = bg;
   roundRectPath(ctx, b.x, b.y, b.w, b.h, r);
   ctx.fill();
+  // 边框
   ctx.lineWidth = isSel ? 4 : 2;
   ctx.strokeStyle = isSel
     ? '#ff7a18'
@@ -1162,38 +1219,56 @@ function drawMatchBlock(b) {
   roundRectPath(ctx, b.x, b.y, b.w, b.h, r);
   ctx.stroke();
 
-  const pad = 8;
-  const maxW = b.w - pad * 2;
-  if (b.type === 'en') {
-    ctx.fillStyle = '#1565c0';
-    let fs = Math.min(b.h * 0.42, 40);
-    const fam = (SPELL_FONT || 'sans-serif');
-    ctx.font = 'bold ' + fs + 'px ' + fam;
-    while (ctx.measureText(b.text).width > maxW && fs > 10) {
-      fs -= 1; ctx.font = 'bold ' + fs + 'px ' + fam;
+  if (showFront) {
+    const maxW = b.w - MATCH_PAD * 2;
+    if (b.type === 'en') {
+      ctx.fillStyle = '#1565c0';
+      let fs = Math.min(MATCH_EN_FS, b.h * 0.5);
+      const fam = (SPELL_FONT || 'sans-serif');
+      ctx.font = 'bold ' + fs + 'px ' + fam;
+      while (ctx.measureText(b.text).width > maxW && fs > 10) {
+        fs -= 1; ctx.font = 'bold ' + fs + 'px ' + fam;
+      }
+      ctx.fillText(b.text, b.x + b.w / 2, b.y + b.h / 2);
+    } else {
+      ctx.fillStyle = '#8a5a2b';
+      let fs = Math.min(MATCH_CN_FS, b.h * 0.5);
+      ctx.font = fs + 'px sans-serif';
+      while (ctx.measureText(b.text).width > maxW && fs > 10) {
+        fs -= 1; ctx.font = fs + 'px sans-serif';
+      }
+      ctx.fillText(b.text, b.x + b.w / 2, b.y + b.h / 2);
     }
-    ctx.fillText(b.text, b.x + b.w / 2, b.y + b.h / 2);
   } else {
-    ctx.fillStyle = '#8a5a2b';
-    let fs = Math.min(b.h * 0.44, 36);
-    ctx.font = fs + 'px sans-serif';
-    while (ctx.measureText(b.text).width > maxW && fs > 10) {
-      fs -= 1; ctx.font = fs + 'px sans-serif';
-    }
-    ctx.fillText(b.text, b.x + b.w / 2, b.y + b.h / 2);
+    // 背面：白色对勾（抵消镜像使正立）
+    const cx = b.x + b.w / 2, cy = b.y + b.h / 2;
+    ctx.save();
+    if (sx < 0) { ctx.translate(cx, cy); ctx.scale(-1, 1); ctx.translate(-cx, -cy); }
+    const s = Math.min(b.w, b.h) * 0.3;
+    ctx.strokeStyle = '#ffffff';
+    ctx.lineWidth = Math.max(3, s * 0.22);
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    ctx.beginPath();
+    ctx.moveTo(cx - s * 0.5, cy);
+    ctx.lineTo(cx - s * 0.1, cy + s * 0.35);
+    ctx.lineTo(cx + s * 0.55, cy - s * 0.4);
+    ctx.stroke();
+    ctx.restore();
   }
+  ctx.restore();
 }
 
 // 点击某块的处理：选中 -> 再点配对
 function onMatchTap(b) {
+  if (b.flip !== undefined && b.flip >= 0 && !b.removed) return;  // 正在翻转消失，忽略
   if (!matchSel) { matchSel = b; return; }
   if (matchSel === b) { matchSel = null; return; }   // 再次点同一块则取消
   const a = matchSel;
   if (a.type !== b.type && a.pairId === b.pairId) {
-    a.removed = true; b.removed = true;
+    a.flip = 0; b.flip = 0;            // 进入翻转消失动画（由主循环推进后移除）
     matchSel = null;
     matchMsg = ''; matchMsgTimer = 0;
-    if (matchBlocks.every((x) => x.removed)) matchDone = true;
   } else {
     matchSel = null;
     matchMsg = '不匹配，再试试～';
@@ -1433,6 +1508,17 @@ function loop() {
   lastTime = now;
   if (scoreBumpTimer > 0) scoreBumpTimer -= dt;
   if (matchMsgTimer > 0) matchMsgTimer -= dt;
+  if (state === 'match') {
+    let allGone = true;
+    for (const b of matchBlocks) {
+      if (b.flip !== undefined && b.flip >= 0 && !b.removed) {
+        b.flip += dt;
+        if (b.flip >= FLIP_DUR) b.removed = true;
+      }
+      if (!b.removed) allGone = false;
+    }
+    if (allGone) matchDone = true;
+  }
   update(dt);
   draw();
   raf(loop);
