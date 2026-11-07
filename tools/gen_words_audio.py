@@ -37,6 +37,12 @@ VOICE = "en-US-AriaNeural"   # 清晰美式女声，适合儿童跟读
 RATE = "+0%"                 # 可改 "-10%" 稍慢
 VOLUME = "+0%"
 
+# 特殊发音覆盖：某些词直接当原文交给 TTS 会被误读
+# （如 "Ms" 会被读成字母音/单位；而 "Ms" 与 "Miss" 尊称同音 /mɪz/，用 Miss 生成最稳）
+PRON_OVERRIDE = {
+    "ms": "Miss",
+}
+
 # Welcome unit 单词（外研剑桥 Join In 三上）
 WELCOME = [
     "let", "begin", "join", "in", "English", "be", "easy", "come", "and",
@@ -123,8 +129,9 @@ async def main(words):
     ok, fail = [], []
     for w in words:
         path = os.path.join(out_dir, w + ".mp3")
+        tts_text = PRON_OVERRIDE.get(w, w)  # 特殊词用同音正确读法生成
         try:
-            await gen_one(w, path)
+            await gen_one(tts_text, path)
             size = os.path.getsize(path)
             ok.append((w, size))
             print(f"  ✓ {w:10s} {size:6d} B")
