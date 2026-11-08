@@ -6,7 +6,7 @@
 
 const {
   LETTERS, GROUP_SIZE, COLS, MAX_TARGET_COUNT, GROUPS_PER_LEVEL,
-  MAX_LIVES, CORRECT_SCORE, WRONG_PENALTY, speedForLevel
+  MAX_LIVES, CORRECT_SCORE, WRONG_PENALTY, speedForLevel, FIND_LETTER_ENABLED
 } = require('./config/gameConfig');
 const {
   announceLetter, announceWord, speakWord, unlockAudio,
@@ -92,8 +92,8 @@ bgGrad.addColorStop(1, '#ffe0b2');
 // state: 'nav' | 'home' | 'playing' | 'gameover' | 'confirmExit'
 //         | 'grade' | 'loading' | 'loadFail' | 'chapter' | 'spellMode'
 //         | 'spell' | 'wordList' | 'match'
-//   nav         —— 模式选择导航页（找字母 / 拼单词）
-//   home        —— 找字母模式主页（原首页，含“开始游戏”按钮）
+//   nav         —— 模式选择导航页（找字母暂置灰「即将到来」/ 拼单词可进入）
+//   home        —— 找字母模式主页（入口暂关，代码保留，见 FIND_LETTER_ENABLED）
 //   playing     —— 找字母游戏中
 //   confirmExit —— 找字母游戏中点击“退出”后的二次确认弹框（游戏暂停）
 //   grade       —— 拼单词：一级菜单（三~六年级共 6 册，卡片可上下滑动）
@@ -598,7 +598,7 @@ function drawHome() {
   ctx.fillText(bestText, W / 2, H * 0.75);
 }
 
-// 绘制导航页（模式选择）：找字母（可点）/ 拼单词（置灰，即将到来）
+// 绘制导航页（模式选择）：找字母（由 FIND_LETTER_ENABLED 决定，关闭时置灰显示「即将到来」）/ 拼单词（可点）
 function drawNav() {
   ctx.fillStyle = bgGrad;
   ctx.fillRect(0, 0, W, H);
@@ -633,7 +633,8 @@ function drawNav() {
   const startY = (H - totalH) / 2 + H * 0.04;
 
   navFindBtn = { x: W / 2 - cardW / 2, y: startY, w: cardW, h: cardH };
-  drawMenuCard(navFindBtn, '找字母', '听音找字母', true);
+  drawMenuCard(navFindBtn, '找字母',
+    FIND_LETTER_ENABLED ? '听音找字母' : '暂未开放', FIND_LETTER_ENABLED);
 
   navSpellBtn = { x: W / 2 - cardW / 2, y: startY + cardH + gap, w: cardW, h: cardH };
   drawMenuCard(navSpellBtn, '拼单词', '按序拼单词', true);
@@ -672,7 +673,8 @@ function drawMenuCard(rect, title, sub, enabled, titleSize) {
   if (!titleSize || titleSize < 12) titleSize = 34;  // 未指定时沿用默认
   ctx.textAlign = 'left';
   ctx.textBaseline = 'middle';
-  ctx.fillStyle = '#ffffff';
+  // 置灰卡片底色是浅灰 #cfcfcf，文字改用深灰，避免白字压浅底看不清
+  ctx.fillStyle = enabled ? '#ffffff' : '#5f5f5f';
   ctx.font = 'bold ' + titleSize + 'px sans-serif';
   // 标题过长时仅在统一字号仍放不下时才缩小（避免各卡片字号不一致）
   let tw = ctx.measureText(title).width;
@@ -682,7 +684,7 @@ function drawMenuCard(rect, title, sub, enabled, titleSize) {
 
   let subSize = Math.min(20, rect.w * 0.05);
   ctx.font = subSize + 'px sans-serif';
-  ctx.fillStyle = 'rgba(255,255,255,0.92)';
+  ctx.fillStyle = enabled ? 'rgba(255,255,255,0.92)' : 'rgba(80,80,80,0.85)';
   ctx.fillText(sub, rect.x + 32, rect.y + rect.h / 2 + 22);
 
   if (enabled) {
@@ -1724,8 +1726,11 @@ adapter.onTouchStart((e) => {
   }
 
   if (state === 'nav') {
-    // 找字母：进入原首页（主页）；拼单词：进入年级选择
-    if (hit(navFindBtn, px, py)) { state = 'home'; return; }
+    // 找字母：开关关闭时卡片置灰，点击直接忽略；拼单词：进入年级选择
+    if (hit(navFindBtn, px, py)) {
+      if (FIND_LETTER_ENABLED) state = 'home';
+      return;
+    }
     if (hit(navSpellBtn, px, py)) { state = 'grade'; gradeScrollY = 0; return; }
     if (hit(sidebarBtn, px, py)) { sidebar.navigate(); return; }
   } else if (state === 'grade') {

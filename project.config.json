@@ -25,6 +25,18 @@
       {
         "value": "data/words_b56_legacy.js",
         "type": "file"
+      },
+      {
+        "value": "dist",
+        "type": "folder"
+      },
+      {
+        "value": "scripts",
+        "type": "folder"
+      },
+      {
+        "value": "platform/tt",
+        "type": "folder"
       }
     ],
     "include": []
