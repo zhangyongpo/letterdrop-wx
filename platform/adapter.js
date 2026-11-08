@@ -31,6 +31,21 @@ API_LIST.forEach((name) => {
   adapter[name] = (typeof fn === 'function') ? fn.bind(HOST) : undefined;
 });
 
+// 包内音频资源路径候选。
+// 两端对「代码包内路径」的解析规则不同：
+//   - 抖音小游戏官方教程写的是不带前导斜杠的包内相对路径（'audio/click.mp3'）；
+//     PC 模拟器是 Web 环境，'/assets/audio/A.mp3' 会被当成站点根 URL 请求而 404，
+//     表现为 NotSupportedError: Failed to load because no supported source was found.
+//   - 微信小游戏历史上用 '/assets/...' 可正常播放，保持绝对路径优先，行为零变化。
+// 返回按优先级排列的候选，utils/audio.js 在 onError 时依次切换重试。
+function audioSrcCandidates(pkgPath) {
+  const rel = String(pkgPath).replace(/^\/+/, '');
+  const abs = '/' + rel;
+  const list = IS_TT ? [rel, './' + rel, abs] : [abs, rel];
+  return list.filter((p, i) => list.indexOf(p) === i);
+}
+adapter.audioSrcCandidates = audioSrcCandidates;
+
 if (IS_TT) {
   // tt 没有 getWindowInfo，用 getSystemInfoSync 提供同结构数据，
   // 让 game.js 取屏幕尺寸的分支在两端一致。

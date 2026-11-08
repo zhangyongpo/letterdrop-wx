@@ -59,11 +59,13 @@ node scripts/build.js --platform tt    # 只构建抖音端
 | 主包 / 总包上限 | 4 M / 30 M | 4 M / 20 M |
 | 当前产物 | 主包 0.95 MiB、总包 13.13 MiB | 同左 |
 | 侧边栏复访 | 不需要，入口自动隐藏 | 必接，导航页底部「加入侧边栏」按钮 |
-| AppID | 根目录 `project.config.json` | `platform/tt/project.config.json`（占位值需替换） |
+| AppID | 根目录 `project.config.json`：`wx4de65122514bb5e0` | `platform/tt/project.config.json`：`tt23d95564bda660c602` |
 
 `game.js` 与 `utils/audio.js` 只依赖 `platform/adapter.js`。适配层把两端 API 统一为 `adapter.*`（微信 → `wx`，抖音 → `tt`），并在抖音端补齐：`getWindowInfo` 回退到 `getSystemInfoSync`、`loadFont` 自动补包根绝对路径、缺失 `setInnerAudioOption` 时跳过全局设置（每个音频实例仍单独设 `obeyMuteSwitch=false`）。**新增平台 API 必须同步加进 `adapter.js` 的 `API_LIST`**，否则构建时的静态检查会拦截。
 
 `platform/sidebar.js` 提供抖音必接的侧边栏复访能力，包内含 `tt.navigateToScene` 调用；微信端 `available()` 恒为 `false`，不绘制也不调用。
+
+**音频路径（两端唯一实质差异）**：抖音小游戏官方教程里包内音效写的是 `audio/click.mp3`（相对路径、无前导斜杠），而 PC 模拟器是 Web 环境，会把 `/assets/audio/A.mp3` 当成站点根 URL 请求而 404，表现就是 `NotSupportedError: Failed to load because no supported source was found.`、全程无声。`adapter.audioSrcCandidates()` 按平台给出候选顺序（微信 `/assets/... → assets/...`，抖音 `assets/... → ./assets/... → /assets/...`），`utils/audio.js` 的 `createCtx()` 在 `onError` 时自动换下一种写法重试，全部失败才回退逐字母拼读。每次失败都会把实际尝试的路径打到 Console，方便定位。微信端首选路径未变，行为零变化。
 
 ## 目录结构
 
@@ -77,7 +79,7 @@ letterdrop-wx/
 │   ├── sidebar.js          抖音侧边栏复访能力（微信端自动隐藏）
 │   └── tt/
 │       ├── game.json       抖音端配置（subPackages 驼峰）
-│       └── project.config.json  抖音端工程配置（AppID 需自行填写）
+│       └── project.config.json  抖音端工程配置（appid: tt23d95564bda660c602）
 ├── scripts/build.js        ★ 双端构建脚本 + 静态护栏 + 体积检查
 ├── assets/
 │   ├── audio/A…Z.mp3       26 个字母发音（主包，找字母首启必需）
@@ -130,8 +132,8 @@ python tools/gen_words_audio.py --manifest-only # 只按现有 mp3 重建 data/w
 ## 运行 / 调试
 
 1. **微信**：开发者工具 → 导入项目 → 选择本目录；`compileType: game`，AppID `wx4de65122514bb5e0`。（也可导入 `dist/wx/` 验证构建产物。）
-2. **抖音**：先 `node scripts/build.js --platform tt`，把 `platform/tt/project.config.json` 的占位 `appid` 换成真实 AppID 后重新构建，用抖音开发者工具导入 `dist/tt/`。
-3. **务必真机（iOS + 安卓）验证**：选任一册次，等分包下载完成后听单词发音是否出声。若主包按绝对路径访问分包音频在某些客户端受限，会走逐字母拼读回退——此时需调整音频路径或改用分包异步化。**抖音端 `InnerAudioContext` 是否支持代码包内绝对路径尚未真机确认，这是双端适配最大的待验证点。**
+2. **抖音**：AppID 已配置为 `tt23d95564bda660c602`；执行 `node scripts/build.js --platform tt`，用抖音开发者工具导入 `dist/tt/`（首次导入时若工具提示 AppID 不匹配，以工具内填写的为准，构建脚本只负责写入配置）。
+3. **务必真机（iOS + 安卓）验证**：选任一册次，等分包下载完成后听单词发音是否出声。抖音模拟器中若曾出现 `no supported source was found` 导致无声，是前导斜杠绝对路径解析问题，已改为相对路径优先 + 失败自动切换（见上节）；重新构建并在 IDE 点「编译」刷新后复测。诊断时看 Console 的 `[audio] 路径加载失败 <路径>`：若三种写法都失败，说明该端 `InnerAudioContext` 不接受包内路径，需改用 `tt.getFileSystemManager().readFileSync()` 读包内文件 → 写入 `tt.env.USER_DATA_PATH` → 用该临时路径播放（官方明确支持临时路径，包内目录读取无需协议头）。若字母音有声而单词音仍是逐字母拼读，则问题只在分包资源访问，需单独验证分包映射。
 4. 抖音端还需确认 `tt.loadFont` 在目标基础库是否生效（低版本自动回退 `sans-serif`，只影响四线三格字形，不崩溃）。
 5. 发布：微信走「类目设置 → 资质审核 → 小程序备案 → 版本审核 → 发布」，不走虚拟支付的 IAA 路径预计 13~37 个工作日；抖音另需**软著（强制，游戏名须与登记名一致）+ ICP 备案**，宜与开发并行办理。分包不改变审核链路，也不额外收费。
 
@@ -150,3 +152,4 @@ python tools/gen_words_audio.py --manifest-only # 只按现有 mp3 重建 data/w
 - **新增三下 / 四下**：新增 297 个发音 mp3 与 `g3b` / `g4b` 两个分包，册次增至 6 册、mp3 共 944 个；年级页改数据驱动滚动列表（点击/滑动分离）；slug 兼容撇号词。五下/六下新版未出版，旧版词表单独留存未接入。
 - **对对碰点读发音**：点击英文卡播该词发音、中文卡保持安静；发音模块加入连点互斥与拼读回退链终止，避免多词叠音；进入对对碰时若分包未下载会后台补下载。
 - **双端单仓库改造**：新增 `platform/adapter.js` 收口 13 个平台 API、`platform/sidebar.js` 侧边栏复访、`platform/tt/` 抖音配置（驼峰 `subPackages`）、`scripts/build.js` 双端构建与静态护栏；`dist/` 不入库。微信端冒烟测试行为不变。
+- **修复抖音模拟器无声**：包内音频路径改为按平台候选（抖音相对路径优先）+ `onError` 自动换写法重试 + Console 打印实际路径；`build.js` 在产物目录被 IDE 占用时退化为覆盖写入，不再中断构建。

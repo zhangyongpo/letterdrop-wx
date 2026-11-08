@@ -17,16 +17,42 @@ let activeWordCtx = null;
 // 逐字母拼读回退链的代号：新的一次点读会让旧链自行终止
 let fallbackGen = 0;
 
+// 统一创建音频上下文：按平台优先顺序设置包内路径，加载失败时自动换下一种写法重试。
+// 微信端优先 '/assets/...'（历史行为不变）；抖音端优先 'assets/...'（官方教程写法，
+// PC 模拟器下前导斜杠会被当成站点根 URL 而 404）。全部候选失败才回调 onFinalError。
+// 每次失败都会打印实际尝试的路径，便于在开发者工具 Console 里定位。
+function createCtx(pkgPath, onFinalError) {
+  const c = adapter.createInnerAudioContext();
+  const candidates = adapter.audioSrcCandidates
+    ? adapter.audioSrcCandidates(pkgPath)
+    : [pkgPath];
+  let idx = 0;
+  c.src = candidates[0];
+  c.obeyMuteSwitch = false; // 静音模式下也播报，方便孩子使用
+  c.onError((res) => {
+    console.log('[audio] 路径加载失败', candidates[idx], res && (res.errMsg || res.errCode));
+    idx += 1;
+    if (idx < candidates.length) {
+      try {
+        c.stop();
+        c.src = candidates[idx];
+        c.play();
+      } catch (e) {}
+      return;
+    }
+    if (onFinalError) {
+      try { onFinalError(res, c); } catch (e) { console.log('[audio] 失败回调异常', e); }
+    }
+  });
+  return c;
+}
+
+function letterSrc(up) { return '/assets/audio/' + up + '.mp3'; }
+
 function getCtx(letter) {
   const up = String(letter).toUpperCase();
   if (!ctxMap[up]) {
-    const c = adapter.createInnerAudioContext();
-    c.src = '/assets/audio/' + up + '.mp3';
-    c.obeyMuteSwitch = false; // 静音模式下也播报，方便孩子使用
-    c.onError((res) => {
-      console.log('[audio] 播放失败', up, res && res.errMsg);
-    });
-    ctxMap[up] = c;
+    ctxMap[up] = createCtx(letterSrc(up));
   }
   return ctxMap[up];
 }
@@ -50,12 +76,8 @@ function announceLetter(letter, gapMs) {
   let played = 0;
   const playOne = () => {
     try {
-      const c = adapter.createInnerAudioContext();
-      c.src = '/assets/audio/' + up + '.mp3';
-      c.obeyMuteSwitch = false;
-      c.onError((res) => {
-        console.log('[audio] 播放失败', up, res && res.errMsg);
-        c.destroy();
+      const c = createCtx(letterSrc(up), (res, ctx) => {
+        try { ctx.destroy(); } catch (e) {}
       });
       c.onEnded(() => {
         played += 1;
@@ -87,10 +109,10 @@ function announceWord(word, gapMs) {
     const up = letters[i].toUpperCase();
     i += 1;
     try {
-      const c = adapter.createInnerAudioContext();
-      c.src = '/assets/audio/' + up + '.mp3';
-      c.obeyMuteSwitch = false;
-      c.onError(() => { c.destroy(); setTimeout(playNext, gap); });
+      const c = createCtx(letterSrc(up), (res, ctx) => {
+        try { ctx.destroy(); } catch (e) {}
+        setTimeout(playNext, gap);
+      });
       c.onEnded(() => { c.destroy(); setTimeout(playNext, gap); });
       c.play();
     } catch (e) {
@@ -178,19 +200,16 @@ function speakWord(word) {
   try {
     let c = wordCtxMap[key];
     if (!c) {
-      c = adapter.createInnerAudioContext();
-      c.src = packageRoot(currentGrade) + f + '.mp3';
-      c.obeyMuteSwitch = false;
+      c = createCtx(packageRoot(currentGrade) + f + '.mp3', (res, ctx) => {
+        console.log('[audio] 单词发音所有路径均失败，回退拼读', f, res && res.errMsg);
+        if (wordCtxMap[key] === ctx) delete wordCtxMap[key];
+        announceWord(word);
+      });
       // 首次播放在「刚切页 / 文件未缓存」时偶尔被静默丢弃；
       // 用 onCanplay 兜底：若加载完成后仍未开始播放，再补一次 play。
       let started = false;
       c.onPlay(() => { started = true; });
       c.onCanplay(() => { if (!started) c.play(); });
-      c.onError((res) => {
-        console.log('[audio] 单词发音播放失败，回退拼读', f, res && res.errMsg);
-        if (wordCtxMap[key] === c) delete wordCtxMap[key];
-        announceWord(word);
-      });
       wordCtxMap[key] = c;
     }
     // 切到不同单词时先停掉上一条；同一单词则是重播（配对成功时完整念一遍）
@@ -213,11 +232,10 @@ function unlockAudio() {
   if (audioUnlocked) return;
   audioUnlocked = true; // 只在首次用户手势内调用一次
   try {
-    const c = adapter.createInnerAudioContext();
-    c.src = '/assets/audio/A.mp3';
-    c.obeyMuteSwitch = false;
+    const c = createCtx(letterSrc('A'), (res, ctx) => {
+      try { ctx.destroy(); } catch (e) {}
+    });
     c.onPlay(() => { try { c.stop(); } catch (e) {} });
-    c.onError(() => { try { c.destroy(); } catch (e) {} });
     c.play();
     setTimeout(() => { try { c.destroy(); } catch (e) {} }, 400); // 兜底释放
   } catch (e) {}

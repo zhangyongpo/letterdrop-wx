@@ -81,7 +81,13 @@ function scanRefs(out) {
 function build(platform) {
   const cfg = LIMITS[platform];
   const out = path.join(DIST, platform);
-  fs.rmSync(out, { recursive: true, force: true });
+  try {
+    fs.rmSync(out, { recursive: true, force: true });
+  } catch (e) {
+    // 开发者工具可能正打开 dist/<platform>/（Windows 文件占用导致整目录删除失败）。
+    // 此时退化为「保留目录 + 覆盖写入」，不中断构建；IDE 里手动点一次编译即可刷新。
+    console.log('  ! 产物目录被占用，跳过整目录清理，改为覆盖写入（请在 IDE 中点「编译」刷新）');
+  }
   fs.mkdirSync(out, { recursive: true });
 
   for (const item of SHARED) {
@@ -124,8 +130,13 @@ function build(platform) {
   console.log('  分包   ' + mib(subSize).padEnd(12) + '(' + subs.length + ' 个)');
   console.log('  总包   ' + mib(total).padEnd(12) + '/ ' + mib(cfg.total) + '  ' + flag(total, cfg.total));
   console.log('  分包字段 ' + cfg.field + ' / 源码检查 OK');
-  if (platform === 'tt' && pc['project.config.json'].appid === 'tt0000000000000000') {
-    console.log('  ⚠ appid 仍是占位值，请在 platform/tt/project.config.json 填入抖音小游戏 AppID');
+  if (platform === 'tt') {
+    const appid = pc['project.config.json'].appid || '';
+    if (appid === 'tt0000000000000000' || !/^tt[0-9a-z]{16,20}$/i.test(appid)) {
+      console.log('  ⚠ appid 不可用（' + (appid || '空') + '），请在 platform/tt/project.config.json 填入抖音小游戏 AppID');
+    } else {
+      console.log('  AppID  ' + appid);
+    }
   }
   if (main > cfg.main || total > cfg.total) throw new Error(platform + ' 端包体超限');
 }
