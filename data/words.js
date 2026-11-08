@@ -83,13 +83,34 @@ const UNIT5 = [
   { en: 'they', cn: '他们' }
 ];
 
+// Unit 6 · Family（2024 审定新版三上第 6 单元，此前词库遗漏，2026-11 补齐）
+const UNIT6 = [
+  { en: 'family', cn: '家，家庭' }, { en: 'job', cn: '工作，任务' },
+  { en: 'brother', cn: '哥哥；弟弟' }, { en: 'sister', cn: '姐姐；妹妹' },
+  { en: 'grandpa', cn: '爷爷；外公' }, { en: 'grandma', cn: '奶奶；外婆' },
+  { en: 'uncle', cn: '叔叔；舅舅' }, { en: 'aunt', cn: '阿姨；姑妈' },
+  { en: 'grandfather', cn: '祖父；外祖父' }, { en: 'grandmother', cn: '祖母；外祖母' },
+  { en: 'mother', cn: '母亲' }, { en: 'father', cn: '父亲' },
+  { en: 'cousin', cn: '堂（表）兄弟姐妹' }, { en: 'who', cn: '谁' },
+  { en: 'her', cn: '她的' }, { en: 'their', cn: '他们的' },
+  { en: 'he', cn: '他' }, { en: 'she', cn: '她' },
+  { en: 'sport', cn: '体育运动' }, { en: 'day', cn: '一天' },
+  { en: 'time', cn: '时间' }, { en: 'long', cn: '长时间的' },
+  { en: 'some', cn: '一些' }, { en: 'tea', cn: '茶' },
+  { en: 'well', cn: '令人满意地' }, { en: 'all', cn: '完全' },
+  { en: 'best', cn: '最好的' }, { en: 'win', cn: '获胜，赢' },
+  { en: 'good job', cn: '干得好' }, { en: 'all right', cn: '没问题的' },
+  { en: 'sports day', cn: '运动日' }
+];
+
 const CHAPTERS = [
   { id: 'welcome', name: 'Welcome unit（起始单元）', words: WELCOME },
   { id: 'u1', name: 'Unit 1 · 交友问候', words: UNIT1 },
   { id: 'u2', name: 'Unit 2 · 颜色世界', words: UNIT2 },
   { id: 'u3', name: 'Unit 3 · 数字动物', words: UNIT3 },
   { id: 'u4', name: 'Unit 4 · 学习用品', words: UNIT4 },
-  { id: 'u5', name: 'Unit 5 · 教室方位', words: UNIT5 }
+  { id: 'u5', name: 'Unit 5 · 教室方位', words: UNIT5 },
+  { id: 'u6', name: 'Unit 6 · 家庭成员', words: UNIT6 }
 ];
 
 // “全部”章节：合并所有单元

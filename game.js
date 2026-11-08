@@ -7,7 +7,10 @@ const {
   LETTERS, GROUP_SIZE, COLS, MAX_TARGET_COUNT, GROUPS_PER_LEVEL,
   MAX_LIVES, CORRECT_SCORE, WRONG_PENALTY, speedForLevel
 } = require('./config/gameConfig');
-const { announceLetter, announceWord, speakWord, unlockAudio } = require('./utils/audio');
+const {
+  announceLetter, announceWord, speakWord, unlockAudio,
+  setGrade, isGradeReady, loadGradeAudio
+} = require('./utils/audio');
 
 // 英文印刷体（Andika，SIL 出品，OFL 开源可商用），专为初学者识字设计，字母形态清晰规范，
 // 小写 a/g 为课本标准双体结构，最贴近小学英语书写印刷体。用于拼单词页。
@@ -15,14 +18,24 @@ const { announceLetter, announceWord, speakWord, unlockAudio } = require('./util
 const SPELL_FONT = (typeof wx !== 'undefined' && wx.loadFont)
   ? wx.loadFont('assets/fonts/andika.ttf')
   : null;
-const { BOOK } = require('./data/words');
+const { BOOKS, GRADES } = require('./data/book_index');
 
-// “拼单词”模式章节列表：各单元 + “全部章节”
-const SPELL_CHAPTERS = BOOK.chapters.concat(BOOK.all);
+// 当前年级词库：六册教材（2024 审定外研剑桥 Join In 三起，三/四上+下册、五/六上）全部内置。
+// 切换年级时由 setCurrentGrade 重算以下三个 let 变量，其余代码在运行时读取，无需改调用点。
+let currentGradeId = 'g3';
+let BOOK = BOOKS.g3;
+let SPELL_CHAPTERS = BOOK.chapters.concat(BOOK.all);
+// 六册发音 mp3 已全部生成并放入各册分包，所有章节（含 Plays）均开放，不再置灰。
+let SPELL_OPEN = BOOK.chapters.map((c) => c.id);
 
-// 已开放（已配真实发音）的章节；未列入的章节在章节选择页置灰并提示“即将到来”。
-// 新增单元开放时，在此数组追加对应 id（并生成其单词发音）即可。
-const SPELL_OPEN = ['welcome', 'u1', 'u2', 'u3', 'u4', 'u5'];
+function setCurrentGrade(id) {
+  currentGradeId = BOOKS[id] ? id : 'g3';
+  BOOK = BOOKS[currentGradeId];
+  SPELL_CHAPTERS = BOOK.chapters.concat(BOOK.all);
+  SPELL_OPEN = BOOK.chapters.map((c) => c.id);
+  chapterScrollY = 0;
+  setGrade(currentGradeId); // 切换 audio.js 的发音查找年级
+}
 
 // 字母徽标配色（彩色圆角方块，白字）
 const LETTER_COLORS = ['#ff7a18', '#ff5252', '#42a5f5', '#66bb6a', '#ab47bc', '#ffca28', '#26c6da', '#ec407a'];
@@ -74,13 +87,17 @@ bgGrad.addColorStop(1, '#ffe0b2');
 
 // ---- 游戏状态 ----
 // state: 'nav' | 'home' | 'playing' | 'gameover' | 'confirmExit'
-//         | 'grade' | 'chapter' | 'spell'
+//         | 'grade' | 'loading' | 'loadFail' | 'chapter' | 'spellMode'
+//         | 'spell' | 'wordList' | 'match'
 //   nav         —— 模式选择导航页（找字母 / 拼单词）
 //   home        —— 找字母模式主页（原首页，含“开始游戏”按钮）
 //   playing     —— 找字母游戏中
 //   confirmExit —— 找字母游戏中点击“退出”后的二次确认弹框（游戏暂停）
-//   grade       —— 拼单词：一级菜单（三年级上册）
+//   grade       —— 拼单词：一级菜单（三~六年级共 6 册，卡片可上下滑动）
+//   loading     —— 年级发音分包下载中（进度条）
+//   loadFail    —— 分包下载失败（可重试 / 仍要进入，发音回退逐字母拼读）
 //   chapter     —— 拼单词：二级菜单（具体章节 + 全部章节）
+//   spellMode   —— 练习模式选择（听音拼 / 中文转 / 查阅 / 对对碰）
 //   spell       —— 拼单词：拼写练习（含答对后的弹框）
 let state = 'nav';
 let best = wx.getStorageSync('letterdrop_best') || 0;
@@ -107,7 +124,16 @@ let exitConfirmBtn = null;       // 退出确认弹框“确定退出”按钮
 let exitCancelBtn = null;        // 退出确认弹框“继续游戏”按钮
 
 // ---- 拼单词模式相关状态/变量 ----
-let gradeBtn = null;             // 一级菜单“三年级上册”卡片区域
+let gradeCards = [];             // 一级菜单各年级卡片 [{rect, id}]（仅可见卡片）
+let gradeScrollY = 0;            // 一级菜单滚动偏移（册数变多后可上下滑动）
+let gradePendingCard = null;     // 按下时命中的册 id，抬手且未拖动才真正进入
+let gradeTouchStartY = 0;        // 按下时的 Y，用于区分点击与滑动
+let gradeTouchMoved = false;     // 是否已判定为滑动
+let pendingGradeId = 'g3';       // 正在下载 / 下载失败的年级
+let loadingProgress = 0;         // 分包下载进度 0~100
+let loadingGradeName = '';       // 正在下载的年级名
+let loadingErrMsg = '';          // 下载失败原因
+let loadFailBtns = null;         // 失败页「重试 / 仍要进入」按钮
 let chapterCards = [];           // 二级菜单各章节卡片区域（数组）
 let chapterScrollY = 0;          // 二级菜单列表滚动偏移
 let lastTouchY = null;           // 触摸拖动时的上一个触点 Y（用于章节滚动）
@@ -277,7 +303,7 @@ function startSpellChapter(chapterId, mode) {
     words = ch.words;
   }
   // 过滤掉含空格的短语（不适合逐字母拼写），再打乱顺序
-  spellList = shuffled(words.filter((w) => !/\s/.test(w.en)));
+  spellList = shuffled(words.filter((w) => /^[a-z]+$/i.test(w.en)));
   spellIndex = 0;
   loadSpellWord(0);
   state = 'spell';
@@ -802,7 +828,7 @@ function drawSpeaker(rect) {
   ctx.beginPath(); ctx.arc(cx + r * 0.15, cy, r * 0.78, -Math.PI / 3.2, Math.PI / 3.2); ctx.stroke();
 }
 
-// 一级菜单：选择年级（当前仅有“三年级上册”）
+// 一级菜单：选择年级/册次（三~六年级共 6 册，卡片超出屏幕时可上下滑动）
 function drawGrade() {
   ctx.fillStyle = bgGrad;
   ctx.fillRect(0, 0, W, H);
@@ -810,24 +836,136 @@ function drawGrade() {
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
 
-  // 返回导航页
   backBtn = { x: 14, y: 14, w: 52, h: 40 };
   drawBackButton(backBtn);
 
-  let titleSize = Math.min(52, W * 0.13);
-  ctx.font = 'bold ' + titleSize + 'px sans-serif';
+  ctx.font = 'bold ' + Math.min(48, W * 0.12) + 'px sans-serif';
   ctx.fillStyle = '#5a2d00';
-  ctx.fillText('选择年级', W / 2, H * 0.16);
+  ctx.fillText('选择年级', W / 2, H * 0.11);
 
   ctx.fillStyle = '#8a5a2b';
-  ctx.font = (Math.min(22, W * 0.055)) + 'px sans-serif';
-  ctx.fillText('Join In 英语 · 三年级上册', W / 2, H * 0.24);
+  ctx.font = (Math.min(20, W * 0.05)) + 'px sans-serif';
+  ctx.fillText('Join In 英语 · 三~六年级（' + GRADES.length + ' 册）', W / 2, H * 0.18);
 
   const cardW = Math.min(360, W - 80);
-  const cardH = 120;
-  const y = (H - cardH) / 2 + H * 0.04;
-  gradeBtn = { x: W / 2 - cardW / 2, y, w: cardW, h: cardH };
-  drawMenuCard(gradeBtn, BOOK.title, '点击进入单词练习', true);
+  const topY = Math.round(H * 0.22);
+  const gap = 12, bottomPad = 20;
+  const listH = (H - bottomPad) - topY;
+  const cardH = Math.max(62, Math.min(88, (listH - gap * (GRADES.length - 1)) / GRADES.length));
+  const contentH = GRADES.length * cardH + gap * (GRADES.length - 1);
+  const maxScroll = Math.max(0, contentH - listH);
+  if (gradeScrollY < 0) gradeScrollY = 0;
+  if (gradeScrollY > maxScroll) gradeScrollY = maxScroll;
+
+  gradeCards = [];
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(0, topY, W, listH);
+  ctx.clip();
+  GRADES.forEach((g, i) => {
+    const y = topY + i * (cardH + gap) - gradeScrollY;
+    if (y + cardH < topY || y > topY + listH) return; // 不可见的卡片不参与命中判定
+    const rect = { x: W / 2 - cardW / 2, y, w: cardW, h: cardH };
+    gradeCards.push({ rect, id: g.id });
+    const sub = isGradeReady(g.id) ? '已下载 · 点击进入' : (g.sub + ' · 点此下载发音');
+    drawMenuCard(rect, g.title, sub, true, Math.min(28, cardH * 0.32));
+  });
+  ctx.restore();
+
+  if (maxScroll > 0) {
+    ctx.fillStyle = '#a9713d';
+    ctx.font = '13px sans-serif';
+    ctx.fillText('上下滑动查看更多册次', W / 2, H - 10);
+  }
+}
+
+// 进入某年级：已加载则直接进章节页，否则先下载该年级的发音分包
+function enterGrade(id) {
+  if (isGradeReady(id)) {
+    setCurrentGrade(id);
+    chapterScrollY = 0;
+    state = 'chapter';
+    return;
+  }
+  startGradeLoad(id);
+}
+
+function startGradeLoad(id) {
+  const g = GRADES.find((x) => x.id === id) || GRADES[0];
+  pendingGradeId = g.id;
+  loadingGradeName = g.title;
+  loadingProgress = 0;
+  loadingErrMsg = '';
+  state = 'loading';
+  loadGradeAudio(
+    g.id,
+    (p) => { loadingProgress = p || 0; },
+    () => {
+      setCurrentGrade(g.id);
+      chapterScrollY = 0;
+      state = 'chapter';
+    },
+    (msg) => {
+      loadingErrMsg = msg || '下载失败';
+      state = 'loadFail';
+    }
+  );
+}
+
+// 分包下载中：显示进度条（下载后由微信本地缓存，之后进入无需再等）
+function drawLoading() {
+  ctx.fillStyle = bgGrad;
+  ctx.fillRect(0, 0, W, H);
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+
+  ctx.font = 'bold ' + Math.min(36, W * 0.095) + 'px sans-serif';
+  ctx.fillStyle = '#5a2d00';
+  ctx.fillText('正在准备发音', W / 2, H * 0.32);
+  ctx.font = Math.min(20, W * 0.05) + 'px sans-serif';
+  ctx.fillStyle = '#8a5a2b';
+  ctx.fillText(loadingGradeName + ' · 首次进入需下载', W / 2, H * 0.40);
+
+  const bw = Math.min(280, W - 80), bx = W / 2 - bw / 2, by = H * 0.48, bh = 16;
+  ctx.fillStyle = 'rgba(255,255,255,0.95)';
+  roundRectPath(ctx, bx, by, bw, bh, 8);
+  ctx.fill();
+  const p = Math.max(0, Math.min(100, loadingProgress));
+  const fw = Math.max(2, bw * p / 100);
+  if (p > 0) {
+    ctx.fillStyle = '#ff7a18';
+    roundRectPath(ctx, bx, by, Math.min(fw, bw), bh, Math.min(8, fw / 2));
+    ctx.fill();
+  }
+  ctx.fillStyle = '#8a5a2b';
+  ctx.font = '16px sans-serif';
+  ctx.fillText(Math.round(p) + '%', W / 2, H * 0.56);
+  ctx.font = '14px sans-serif';
+  ctx.fillText('下载后本地缓存，之后无需联网', W / 2, H * 0.63);
+}
+
+// 下载失败：可重试，也可直接进入（发音自动回退为逐字母拼读，不阻塞玩法）
+function drawLoadFail() {
+  ctx.fillStyle = bgGrad;
+  ctx.fillRect(0, 0, W, H);
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+
+  ctx.font = 'bold ' + Math.min(34, W * 0.09) + 'px sans-serif';
+  ctx.fillStyle = '#5a2d00';
+  ctx.fillText('发音下载失败', W / 2, H * 0.24);
+  ctx.font = Math.min(16, W * 0.042) + 'px sans-serif';
+  ctx.fillStyle = '#8a5a2b';
+  ctx.fillText(loadingErrMsg, W / 2, H * 0.32);
+  ctx.fillText('可重试，或先进入（发音改为逐字母拼读）', W / 2, H * 0.38);
+
+  const cardW = Math.min(340, W - 70), cardH = 92, gap = 18;
+  const y = H * 0.46;
+  const retry = { x: W / 2 - cardW / 2, y, w: cardW, h: cardH };
+  const fallback = { x: retry.x, y: y + cardH + gap, w: cardW, h: cardH };
+  loadFailBtns = { retry, fallback };
+  drawMenuCard(retry, '重试下载', '重新下载该年级发音', true, 28);
+  drawMenuCard(fallback, '仍要进入', '暂不下载，继续玩拼词', true, 28);
 }
 
 // 二级菜单：选择章节（含“全部章节”），列表支持上下拖动滚动
@@ -885,10 +1023,10 @@ function drawChapter() {
         // “全部章节”只统计已开放单元的单词（与 startSpellChapter 实际合并的范围一致）
         count = SPELL_OPEN.reduce((s, id) => {
           const c = BOOK.chapters.find((x) => x.id === id);
-          return s + (c ? c.words.filter((w) => !/\s/.test(w.en)).length : 0);
+          return s + (c ? c.words.filter((w) => /^[a-z]+$/i.test(w.en)).length : 0);
         }, 0);
       } else {
-        count = ch.words.filter((w) => !/\s/.test(w.en)).length;
+        count = ch.words.filter((w) => /^[a-z]+$/i.test(w.en)).length;
       }
       drawMenuCard(rect, ch.name, count + ' 个单词', enabled, uniTitleSize);
     }
@@ -1479,6 +1617,8 @@ function draw() {
   else if (state === 'confirmExit') { drawPlaying(); drawExitConfirm(); }
   else if (state === 'gameover') drawGameOver();
   else if (state === 'grade') drawGrade();
+  else if (state === 'loading') drawLoading();
+  else if (state === 'loadFail') drawLoadFail();
   else if (state === 'chapter') drawChapter();
   else if (state === 'spellMode') drawSpellMode();
   else if (state === 'spell') drawSpell();
@@ -1556,10 +1696,28 @@ wx.onTouchStart((e) => {
   if (state === 'nav') {
     // 找字母：进入原首页（主页）；拼单词：进入年级选择
     if (hit(navFindBtn, px, py)) { state = 'home'; return; }
-    if (hit(navSpellBtn, px, py)) { state = 'grade'; return; }
+    if (hit(navSpellBtn, px, py)) { state = 'grade'; gradeScrollY = 0; return; }
   } else if (state === 'grade') {
     if (hit(backBtn, px, py)) { state = 'nav'; return; }
-    if (hit(gradeBtn, px, py)) { state = 'chapter'; chapterScrollY = 0; return; }
+    // 册数较多时列表可滚动：按下先记录命中卡片，抬手且未判定为滑动才真正进入，
+    // 避免上下滑动时误触卡片直接跳页。
+    gradePendingCard = null;
+    gradeTouchStartY = py;
+    gradeTouchMoved = false;
+    for (const c of gradeCards) {
+      if (hit(c.rect, px, py)) { gradePendingCard = c.id; break; }
+    }
+  } else if (state === 'loading') {
+    // 下载中不响应操作，等分包回调切页
+  } else if (state === 'loadFail') {
+    if (!loadFailBtns) return;
+    if (hit(loadFailBtns.retry, px, py)) { startGradeLoad(pendingGradeId); return; }
+    if (hit(loadFailBtns.fallback, px, py)) {
+      setCurrentGrade(pendingGradeId);
+      chapterScrollY = 0;
+      state = 'chapter';
+      return;
+    }
   } else if (state === 'chapter') {
     if (hit(backBtn, px, py)) { state = 'grade'; return; }
     for (const item of chapterCards) {
@@ -1627,14 +1785,25 @@ wx.onTouchStart((e) => {
   }
 });
 
-// 章节列表上下拖动滚动（仅 chapter 状态生效）
+// 列表上下拖动滚动（grade / chapter / wordList 三个状态生效）
 wx.onTouchMove((e) => {
-  if (state !== 'chapter' && state !== 'wordList') { lastTouchY = null; return; }
+  if (state !== 'grade' && state !== 'chapter' && state !== 'wordList') { lastTouchY = null; return; }
   const p = getPoint(e);
   if (!p) return;
   if (lastTouchY !== null) {
     const dy = p.y - lastTouchY;
-    if (state === 'chapter') {
+    if (state === 'grade') {
+      if (Math.abs(p.y - gradeTouchStartY) > 8) gradeTouchMoved = true;
+      gradeScrollY -= dy;
+      const topY = Math.round(H * 0.22);
+      const gap = 12, bottomPad = 20;
+      const listH = (H - bottomPad) - topY;
+      const cardH = Math.max(62, Math.min(88, (listH - gap * (GRADES.length - 1)) / GRADES.length));
+      const contentH = GRADES.length * cardH + gap * (GRADES.length - 1);
+      const maxScroll = Math.max(0, contentH - listH);
+      if (gradeScrollY < 0) gradeScrollY = 0;
+      if (gradeScrollY > maxScroll) gradeScrollY = maxScroll;
+    } else if (state === 'chapter') {
       chapterScrollY -= dy;
       const startY = Math.round(H * 0.22);
       const rowH = 72, gap = 16;
@@ -1658,7 +1827,15 @@ wx.onTouchMove((e) => {
   lastTouchY = p.y;
 });
 
-wx.onTouchEnd(() => { lastTouchY = null; });
+wx.onTouchEnd(() => {
+  if (state === 'grade' && !gradeTouchMoved && gradePendingCard) {
+    const id = gradePendingCard;
+    gradePendingCard = null;
+    enterGrade(id);
+  }
+  gradePendingCard = null;
+  lastTouchY = null;
+});
 
 // 启动渲染循环
 raf(loop);

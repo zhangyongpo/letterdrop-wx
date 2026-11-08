@@ -1,9 +1,13 @@
 // utils/audio.js
-// 离线播放字母发音：使用包内预录的 wav 文件，无需插件 / 云端 / 网络。
-// 文件位于 /assets/audio/<字母>.wav（绝对包路径，真机可用）。
-// 彻底替代原先的腾讯云 ASR 方案——游戏改为“App 报字母、玩家点击”。
+// 播放字母 A~Z 的读音（主包 /assets/audio/<字母>.mp3）与单词真实发音（年级分包内 mp3）。
+// 全部资源随包分发、加载后由微信本地缓存，完全离线，无网络请求 / 无后端。
+//
+// 分包结构见 game.json：g3/g4/g5/g6 各自只放该年级的单词发音 mp3，
+// 主包保留字体与 A~Z.mp3（找字母模式首启必需）。进入某年级前由
+// game.js 调用 loadGradeAudio() 触发 wx.loadSubpackage，成功后才能播放该年级音频。
 
 const { WORD_AUDIO } = require('../data/word_audio');
+const { slug, packageRoot } = require('../data/book_index');
 
 const ctxMap = {};
 
@@ -60,11 +64,10 @@ function announceLetter(letter, gapMs) {
   playOne();
 }
 
-// 拼读整个单词：逐字母播放包内字母发音（A.mp3 等），每个字母间间隔 gapMs。
-// 用于“拼单词”模式——目前仅有单字母音频，故以“字母名逐个念”的方式朗读单词，
-// 无需任何云端 / 网络 / 额外音频文件。若日后需要真实单词发音，可替换为单词级 mp3。
+// 逐字母拼读回退：跳过空格/连字符，只念字母名（短语也能有声音反馈）。
+// 用于分包尚未加载、或个别词条没有预生成发音时，保证任何单词都能出声。
 function announceWord(word, gapMs) {
-  const letters = String(word).toLowerCase().split('');
+  const letters = String(word).toLowerCase().replace(/[^a-z]/g, '').split('');
   const gap = typeof gapMs === 'number' ? gapMs : 260;
   let i = 0;
   const playNext = () => {
@@ -85,34 +88,98 @@ function announceWord(word, gapMs) {
   playNext();
 }
 
-// 单词真实发音上下文缓存：同一单词复用，反复调用时先 stop 再 play，避免叠加。
+// ---- 年级分包状态 ----
+let currentGrade = 'g3';
+const readyMap = {};     // grade -> 是否已加载完成
+const loadingMap = {};   // grade -> 等待中的回调数组（避免重复触发下载）
+
+function setGrade(g) { currentGrade = g || 'g3'; }
+function getGrade() { return currentGrade; }
+function isGradeReady(g) { return !!readyMap[g || currentGrade]; }
+
+// 触发某年级音频分包下载；已加载则立即成功。
+// onProgress(percent) / onSuccess() / onFail(errMsg) 均为可选回调。
+function loadGradeAudio(g, onProgress, onSuccess, onFail) {
+  const grade = g || currentGrade;
+  const cb = { onProgress, onSuccess, onFail };
+  if (readyMap[grade]) { if (onSuccess) onSuccess(); return; }
+
+  // 基础库 2.1.0 以下没有 wx.loadSubpackage：微信后台会下发整包兼容版，
+  // 目录结构保持不变，直接按路径播放即可。
+  if (typeof wx === 'undefined' || typeof wx.loadSubpackage !== 'function') {
+    readyMap[grade] = true;
+    if (onSuccess) onSuccess();
+    return;
+  }
+
+  if (loadingMap[grade]) { loadingMap[grade].push(cb); return; }
+  const cbs = [cb];
+  loadingMap[grade] = cbs;
+
+  const finish = (ok, errMsg) => {
+    const list = loadingMap[grade] || [];
+    delete loadingMap[grade];
+    if (ok) readyMap[grade] = true;
+    list.forEach((c) => {
+      try {
+        if (ok) {
+          if (c.onProgress) c.onProgress(100);
+          if (c.onSuccess) c.onSuccess();
+        } else if (c.onFail) {
+          c.onFail(errMsg || '下载失败');
+        }
+      } catch (e) { console.log('[audio] 分包回调异常', e); }
+    });
+  };
+
+  try {
+    const task = wx.loadSubpackage({
+      name: grade,
+      success: () => finish(true),
+      fail: (res) => finish(false, (res && res.errMsg) || '下载失败')
+    });
+    if (task && task.onProgressUpdate) {
+      task.onProgressUpdate((res) => {
+        (loadingMap[grade] || []).forEach((c) => {
+          try { if (c.onProgress) c.onProgress(res.progress || 0); } catch (e) {}
+        });
+      });
+    }
+  } catch (e) {
+    finish(false, String(e));
+  }
+}
+
+// 单词真实发音上下文缓存：按「年级 + 词条」复用，反复调用时先 stop 再 play。
 const wordCtxMap = {};
 
-// 播放单词真实发音：优先使用 edge-tts 预生成的单词级 mp3（清单 data/word_audio.js 覆盖的词）；
-// 清单未覆盖（如尚未生成发音的单元）时，自动回退为逐字母拼读，保证任何单词都能出声。
+// 播放单词真实发音：优先播分包内 edge-tts 预生成的 mp3；
+// 分包未加载 / 清单未覆盖 / 播放失败时回退为逐字母拼读。
 function speakWord(word) {
-  const f = String(word).toLowerCase();
-  if (WORD_AUDIO.indexOf(f) < 0) {
+  const f = slug(word);
+  const list = (WORD_AUDIO && WORD_AUDIO[currentGrade]) || [];
+  if (list.indexOf(f) < 0 || !readyMap[currentGrade]) {
     announceWord(word);
     return;
   }
+  const key = currentGrade + ':' + f;
   try {
-    let c = wordCtxMap[f];
+    let c = wordCtxMap[key];
     if (!c) {
       c = wx.createInnerAudioContext();
-      c.src = '/assets/audio/words/' + f + '.mp3';
+      c.src = packageRoot(currentGrade) + f + '.mp3';
       c.obeyMuteSwitch = false;
-      // 首次播放在“刚切页 / 文件未缓存”时偶尔被静默丢弃；
+      // 首次播放在「刚切页 / 文件未缓存」时偶尔被静默丢弃；
       // 用 onCanplay 兜底：若加载完成后仍未开始播放，再补一次 play。
       let started = false;
       c.onPlay(() => { started = true; });
       c.onCanplay(() => { if (!started) c.play(); });
       c.onError((res) => {
         console.log('[audio] 单词发音播放失败，回退拼读', f, res && res.errMsg);
-        if (wordCtxMap[f] === c) delete wordCtxMap[f];
+        if (wordCtxMap[key] === c) delete wordCtxMap[key];
         announceWord(word);
       });
-      wordCtxMap[f] = c;
+      wordCtxMap[key] = c;
     }
     c.stop();
     c.play();
@@ -121,10 +188,9 @@ function speakWord(word) {
   }
 }
 
-// iOS 微信小游戏（尤其高版本 iOS / 新版微信）要求音频的“首次播放”必须在用户手势链内触发，
+// iOS 微信小游戏（尤其高版本 iOS / 新版微信）要求音频的「首次播放」必须在用户手势链内触发，
 // 否则会被系统静默拦截——表现为低版本 iOS 能出声、高版本 iOS 完全没声、安卓正常。
-// 在首次用户触摸时真实播放一次并按住（onPlay 立刻停止，几乎无声），激活 AudioSession，
-// 之后所有异步报音（字母掉落自动报音、切页后自动发音）才能正常出声。
+// 在首次用户触摸时真实播放一次并按住（onPlay 立刻停止，几乎无声），激活 AudioSession。
 let audioUnlocked = false;
 function unlockAudio() {
   if (audioUnlocked) return;
@@ -133,8 +199,6 @@ function unlockAudio() {
     const c = wx.createInnerAudioContext();
     c.src = '/assets/audio/A.mp3';
     c.obeyMuteSwitch = false;
-    // 真实播放一次以激活 iOS AudioSession；拿到 onPlay 立即停，几乎听不到，
-    // 但足以让系统音频会话进入“已激活”状态，后续异步 play 不再被拦截。
     c.onPlay(() => { try { c.stop(); } catch (e) {} });
     c.onError(() => { try { c.destroy(); } catch (e) {} });
     c.play();
@@ -142,4 +206,7 @@ function unlockAudio() {
   } catch (e) {}
 }
 
-module.exports = { speakLetter, announceLetter, announceWord, speakWord, unlockAudio };
+module.exports = {
+  speakLetter, announceLetter, announceWord, speakWord, unlockAudio,
+  setGrade, getGrade, isGradeReady, loadGradeAudio
+};

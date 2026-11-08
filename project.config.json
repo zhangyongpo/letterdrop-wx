@@ -2,8 +2,30 @@
   "description": "字母掉落英语认读小游戏 - 微信小游戏（原生 Canvas 2D）",
   "packOptions": {
     "ignore": [
-      { "type": "file", "value": "icon.png" },
-      { "type": "file", "value": "icon-cn.png" }
+      {
+        "value": "icon.png",
+        "type": "file"
+      },
+      {
+        "value": "icon-cn.png",
+        "type": "file"
+      },
+      {
+        "value": "tools",
+        "type": "folder"
+      },
+      {
+        "value": "README.md",
+        "type": "file"
+      },
+      {
+        "value": "LICENSE",
+        "type": "file"
+      },
+      {
+        "value": "data/words_b56_legacy.js",
+        "type": "file"
+      }
     ],
     "include": []
   },
@@ -38,5 +60,6 @@
   "projectname": "letterdrop-wx",
   "condition": {},
   "simulatorPluginLibVersion": {},
-  "editorSetting": {}
+  "editorSetting": {},
+  "isGameTourist": false
 }
