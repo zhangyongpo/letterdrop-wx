@@ -164,7 +164,7 @@ let spellModeCards = [];         // 模式选择页两张卡片区域（{rect, m
 let spellModeBackBtn = null;     // 模式选择页返回按钮（左上角）
 
 // ---- 单词对对碰（match）相关状态 ----
-let matchBlocks = [];            // 棋盘块：{x,y,w,h,text,type:'en'|'cn',pairId,removed}
+let matchBlocks = [];            // 棋盘块：{x,y,w,h,text,type:'en'|'cn',pairId,word,removed}，word 为该卡对应英文词条
 let matchCols = 0, matchRows = 0;
 let matchSel = null;             // 当前选中的块（等待第二块）
 let matchDone = false;           // 是否全部消除
@@ -1057,7 +1057,7 @@ function drawSpellMode() {
     { mode: 'listen', title: '听音拼单词', sub: '听发音，拼出单词' },
     { mode: 'cn', title: '中文转单词', sub: '看中文意思，拼出单词' },
     { mode: 'words', title: '全部单词', sub: '浏览本单元所有单词' },
-    { mode: 'match', title: '单词对对碰', sub: '点击英文与中文配对消除' },
+    { mode: 'match', title: '单词对对碰', sub: '点英文卡听发音，英中配对消除' },
   ];
   const n = modes.length;
   // 卡片高度自适应：保证从标题区下到屏幕底能完整放下 n 张（不溢出小屏）
@@ -1176,6 +1176,10 @@ function startMatch(chapterId) {
   const words = getChapterWordsPlain(chapterId);
   if (words.length === 0) { state = 'spellMode'; return; }
 
+  // 若用户曾在分包下载失败时选了「仍要进入」，这里静默补下载：
+  // 下载完成后后续点击即可听到真实单词发音（此前会回退逐字母拼读）。
+  if (!isGradeReady(currentGradeId)) loadGradeAudio(currentGradeId);
+
   const padX = 14;
   const padTop = Math.round(H * 0.16);           // 顶部标题区高度
   const padBottom = 18;
@@ -1216,8 +1220,9 @@ function startMatch(chapterId) {
     const chosen = shuffled(words).slice(0, need);
     const blocks = [];
     chosen.forEach((w, i) => {
-      blocks.push({ text: w.en, type: 'en', pairId: i });
-      blocks.push({ text: w.cn, type: 'cn', pairId: i });
+      // word 统一保存该卡对应的英文词条；当前只有英文卡用它点读发音，中文卡仅作数据记录
+      blocks.push({ text: w.en, type: 'en', pairId: i, word: w.en });
+      blocks.push({ text: w.cn, type: 'cn', pairId: i, word: w.en });
     });
     const sh = shuffled(blocks);
     const res = layout(sh);
@@ -1277,7 +1282,7 @@ function drawMatch() {
   ctx.fillText('单词对对碰', W / 2, Math.round(H * 0.07));
   ctx.font = '13px sans-serif';
   ctx.fillStyle = 'rgba(138,90,43,0.75)';
-  ctx.fillText('点击英文卡与中文卡配对，消除全部卡片', W / 2, Math.round(H * 0.115));
+  ctx.fillText('点英文卡听发音 · 与中文卡配对消除', W / 2, Math.round(H * 0.115));
 
   // 块
   for (const b of matchBlocks) {
@@ -1397,9 +1402,11 @@ function drawMatchBlock(b) {
   ctx.restore();
 }
 
-// 点击某块的处理：选中 -> 再点配对
+// 点击某块：只有英文卡播放该词读音（中文卡保持安静，避免一按中文就提前念出英文、
+// 削弱配对练习），再执行选中 / 配对判定。点中正在翻转消失的块不响应。
 function onMatchTap(b) {
   if (b.flip !== undefined && b.flip >= 0 && !b.removed) return;  // 正在翻转消失，忽略
+  if (b.type === 'en') speakWord(b.word || b.text);
   if (!matchSel) { matchSel = b; return; }
   if (matchSel === b) { matchSel = null; return; }   // 再次点同一块则取消
   const a = matchSel;

@@ -11,6 +11,11 @@ const { slug, packageRoot } = require('../data/book_index');
 
 const ctxMap = {};
 
+// 当前正在播放的单词音频：快速连点不同卡片时先停上一条，避免多个发音叠在一起
+let activeWordCtx = null;
+// 逐字母拼读回退链的代号：新的一次点读会让旧链自行终止
+let fallbackGen = 0;
+
 function getCtx(letter) {
   const up = String(letter).toUpperCase();
   if (!ctxMap[up]) {
@@ -67,11 +72,17 @@ function announceLetter(letter, gapMs) {
 // 逐字母拼读回退：跳过空格/连字符，只念字母名（短语也能有声音反馈）。
 // 用于分包尚未加载、或个别词条没有预生成发音时，保证任何单词都能出声。
 function announceWord(word, gapMs) {
+  // 新的一次点读先终止上一条尚未播完的拼读链，避免连点时字母音叠加
+  const gen = ++fallbackGen;
+  if (activeWordCtx) {
+    try { activeWordCtx.stop(); } catch (e) {}
+    activeWordCtx = null;
+  }
   const letters = String(word).toLowerCase().replace(/[^a-z]/g, '').split('');
   const gap = typeof gapMs === 'number' ? gapMs : 260;
   let i = 0;
   const playNext = () => {
-    if (i >= letters.length) return;
+    if (gen !== fallbackGen || i >= letters.length) return;
     const up = letters[i].toUpperCase();
     i += 1;
     try {
@@ -181,6 +192,11 @@ function speakWord(word) {
       });
       wordCtxMap[key] = c;
     }
+    // 切到不同单词时先停掉上一条；同一单词则是重播（配对成功时完整念一遍）
+    if (activeWordCtx && activeWordCtx !== c) {
+      try { activeWordCtx.stop(); } catch (e) {}
+    }
+    activeWordCtx = c;
     c.stop();
     c.play();
   } catch (e) {
