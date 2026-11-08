@@ -1,0 +1,17 @@
+{
+  "description": "字母拼拼 - 抖音小游戏（原生 Canvas 2D）",
+  "appid": "tt0000000000000000",
+  "projectname": "letterdrop-tt",
+  "compileType": "game",
+  "setting": {
+    "urlCheck": false,
+    "es6": true,
+    "minified": true,
+    "bigPackageSizeSupport": true
+  },
+  "packOptions": {
+    "ignore": [],
+    "include": []
+  },
+  "condition": {}
+}

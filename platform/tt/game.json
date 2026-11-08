@@ -1,0 +1,12 @@
+{
+  "deviceOrientation": "portrait",
+  "showStatusBar": false,
+  "subPackages": [
+    { "name": "g3", "root": "subpackages/g3/" },
+    { "name": "g3b", "root": "subpackages/g3b/" },
+    { "name": "g4", "root": "subpackages/g4/" },
+    { "name": "g4b", "root": "subpackages/g4b/" },
+    { "name": "g5", "root": "subpackages/g5/" },
+    { "name": "g6", "root": "subpackages/g6/" }
+  ]
+}

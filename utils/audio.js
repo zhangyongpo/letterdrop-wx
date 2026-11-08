@@ -1,13 +1,14 @@
 // utils/audio.js
 // 播放字母 A~Z 的读音（主包 /assets/audio/<字母>.mp3）与单词真实发音（年级分包内 mp3）。
-// 全部资源随包分发、加载后由微信本地缓存，完全离线，无网络请求 / 无后端。
+// 全部资源随包分发、下载后由客户端本地缓存，完全离线，无网络请求 / 无后端。
 //
-// 分包结构见 game.json：g3/g4/g5/g6 各自只放该年级的单词发音 mp3，
-// 主包保留字体与 A~Z.mp3（找字母模式首启必需）。进入某年级前由
-// game.js 调用 loadGradeAudio() 触发 wx.loadSubpackage，成功后才能播放该年级音频。
+// 分包结构见各端 game.json：g3/g3b/g4/g4b/g5/g6 各自只放该册的单词发音 mp3，
+// 主包保留字体与 A~Z.mp3（找字母模式首启必需）。进入某册前由
+// game.js 调用 loadGradeAudio() 触发平台分包加载，成功后才能播放该册音频。
 
 const { WORD_AUDIO } = require('../data/word_audio');
 const { slug, packageRoot } = require('../data/book_index');
+const adapter = require('../platform/adapter');
 
 const ctxMap = {};
 
@@ -19,7 +20,7 @@ let fallbackGen = 0;
 function getCtx(letter) {
   const up = String(letter).toUpperCase();
   if (!ctxMap[up]) {
-    const c = wx.createInnerAudioContext();
+    const c = adapter.createInnerAudioContext();
     c.src = '/assets/audio/' + up + '.mp3';
     c.obeyMuteSwitch = false; // 静音模式下也播报，方便孩子使用
     c.onError((res) => {
@@ -49,7 +50,7 @@ function announceLetter(letter, gapMs) {
   let played = 0;
   const playOne = () => {
     try {
-      const c = wx.createInnerAudioContext();
+      const c = adapter.createInnerAudioContext();
       c.src = '/assets/audio/' + up + '.mp3';
       c.obeyMuteSwitch = false;
       c.onError((res) => {
@@ -86,7 +87,7 @@ function announceWord(word, gapMs) {
     const up = letters[i].toUpperCase();
     i += 1;
     try {
-      const c = wx.createInnerAudioContext();
+      const c = adapter.createInnerAudioContext();
       c.src = '/assets/audio/' + up + '.mp3';
       c.obeyMuteSwitch = false;
       c.onError(() => { c.destroy(); setTimeout(playNext, gap); });
@@ -115,9 +116,9 @@ function loadGradeAudio(g, onProgress, onSuccess, onFail) {
   const cb = { onProgress, onSuccess, onFail };
   if (readyMap[grade]) { if (onSuccess) onSuccess(); return; }
 
-  // 基础库 2.1.0 以下没有 wx.loadSubpackage：微信后台会下发整包兼容版，
+  // 客户端不支持分包加载时（老版本基础库）：后台会下发整包兼容版，
   // 目录结构保持不变，直接按路径播放即可。
-  if (typeof wx === 'undefined' || typeof wx.loadSubpackage !== 'function') {
+  if (typeof adapter.loadSubpackage !== 'function') {
     readyMap[grade] = true;
     if (onSuccess) onSuccess();
     return;
@@ -144,7 +145,7 @@ function loadGradeAudio(g, onProgress, onSuccess, onFail) {
   };
 
   try {
-    const task = wx.loadSubpackage({
+    const task = adapter.loadSubpackage({
       name: grade,
       success: () => finish(true),
       fail: (res) => finish(false, (res && res.errMsg) || '下载失败')
@@ -177,7 +178,7 @@ function speakWord(word) {
   try {
     let c = wordCtxMap[key];
     if (!c) {
-      c = wx.createInnerAudioContext();
+      c = adapter.createInnerAudioContext();
       c.src = packageRoot(currentGrade) + f + '.mp3';
       c.obeyMuteSwitch = false;
       // 首次播放在「刚切页 / 文件未缓存」时偶尔被静默丢弃；
@@ -212,7 +213,7 @@ function unlockAudio() {
   if (audioUnlocked) return;
   audioUnlocked = true; // 只在首次用户手势内调用一次
   try {
-    const c = wx.createInnerAudioContext();
+    const c = adapter.createInnerAudioContext();
     c.src = '/assets/audio/A.mp3';
     c.obeyMuteSwitch = false;
     c.onPlay(() => { try { c.stop(); } catch (e) {} });

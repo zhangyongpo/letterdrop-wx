@@ -1,7 +1,8 @@
-// game.js —— 微信小游戏版（原生 Canvas 2D，无 DOM / 无 WXML）
+// game.js —— 双端小游戏版（微信 / 抖音，原生 Canvas 2D，无 DOM / 无 WXML）
 // 玩法：App 报出目标字母读音，屏幕上 6 个字母（3列×2排）掉落，
 // 玩家在落地前点中正确字母消除；不区分大小写；点错（干扰项）扣分（不低于0）；
 // 目标字母落地漏点扣 1 命；每 10 组速度 +1 档（无上限）；3 命结束。
+// 所有平台 API 统一经 platform/adapter.js 收口，本文件不直接引用 wx / tt。
 
 const {
   LETTERS, GROUP_SIZE, COLS, MAX_TARGET_COUNT, GROUPS_PER_LEVEL,
@@ -11,12 +12,14 @@ const {
   announceLetter, announceWord, speakWord, unlockAudio,
   setGrade, isGradeReady, loadGradeAudio
 } = require('./utils/audio');
+const adapter = require('./platform/adapter');
+const sidebar = require('./platform/sidebar');
 
 // 英文印刷体（Andika，SIL 出品，OFL 开源可商用），专为初学者识字设计，字母形态清晰规范，
 // 小写 a/g 为课本标准双体结构，最贴近小学英语书写印刷体。用于拼单词页。
-// wx.loadFont 在游戏启动时加载一次，Canvas 用返回的字族名即可，加载完成前自动回退 sans-serif。
-const SPELL_FONT = (typeof wx !== 'undefined' && wx.loadFont)
-  ? wx.loadFont('assets/fonts/andika.ttf')
+// 平台的 loadFont 在游戏启动时加载一次，Canvas 用返回的字族名即可，加载完成前自动回退 sans-serif。
+const SPELL_FONT = (typeof adapter.loadFont === 'function')
+  ? adapter.loadFont('assets/fonts/andika.ttf')
   : null;
 const { BOOKS, GRADES } = require('./data/book_index');
 
@@ -70,9 +73,9 @@ function hit(rect, px, py) {
 }
 
 // ---- 初始化画布 ----
-const canvas = wx.createCanvas();
+const canvas = adapter.createCanvas();
 const ctx = canvas.getContext('2d');
-const sys = (wx.getWindowInfo ? wx.getWindowInfo() : wx.getSystemInfoSync()) || wx.getSystemInfoSync();
+const sys = (adapter.getWindowInfo ? adapter.getWindowInfo() : adapter.getSystemInfoSync()) || adapter.getSystemInfoSync();
 const dpr = sys.pixelRatio || 2;
 const W = sys.windowWidth || sys.screenWidth || 320;
 const H = sys.windowHeight || sys.screenHeight || 568;
@@ -100,7 +103,7 @@ bgGrad.addColorStop(1, '#ffe0b2');
 //   spellMode   —— 练习模式选择（听音拼 / 中文转 / 查阅 / 对对碰）
 //   spell       —— 拼单词：拼写练习（含答对后的弹框）
 let state = 'nav';
-let best = wx.getStorageSync('letterdrop_best') || 0;
+let best = adapter.getStorageSync('letterdrop_best') || 0;
 let score = 0;
 let lives = MAX_LIVES;
 let groupLevel = 1;
@@ -117,7 +120,8 @@ let scoreBumpTimer = 0;          // 得分 +分 放大动画剩余时间(ms)
 let startBtn = null;             // 首页“开始游戏”按钮区域
 let restartBtn = null;           // 结束页“再来一局”按钮区域
 let navFindBtn = null;           // 导航页“找字母”菜单区域
-let navSpellBtn = null;          // 导航页“拼单词”菜单区域（置灰，即将到来）
+let navSpellBtn = null;          // 导航页“拼单词”菜单区域
+let sidebarBtn = null;           // 导航页侧边栏复访入口（仅抖音端显示）
 let backBtn = null;              // 返回导航页按钮（主页/结束页左上角）
 let exitBtn = null;              // 游戏中左上角“退出”按钮
 let exitConfirmBtn = null;       // 退出确认弹框“确定退出”按钮
@@ -252,7 +256,7 @@ function endGame() {
   groupActive = false;
   if (groupTimer) clearTimeout(groupTimer);
   best = Math.max(best, score);
-  wx.setStorageSync('letterdrop_best', best);
+  adapter.setStorageSync('letterdrop_best', best);
   state = 'gameover';
 }
 
@@ -429,7 +433,7 @@ function onTapLetter(px, py) {
         scoreBumpTimer = 250;
         if (score > best) {
           best = score;
-          wx.setStorageSync('letterdrop_best', best);
+          adapter.setStorageSync('letterdrop_best', best);
         }
         // 本组目标全部找到 -> 立即清场进入下一组
         if (foundThisGroup >= totalTargetsThisGroup) {
@@ -633,6 +637,25 @@ function drawNav() {
 
   navSpellBtn = { x: W / 2 - cardW / 2, y: startY + cardH + gap, w: cardW, h: cardH };
   drawMenuCard(navSpellBtn, '拼单词', '按序拼单词', true);
+
+  // 抖音小游戏必接「侧边栏复访」：仅在抖音端绘制可见入口，微信端完全不出现。
+  sidebarBtn = null;
+  if (sidebar.available()) {
+    const bw = Math.min(230, W - 80);
+    const bh = 42;
+    sidebarBtn = { x: W / 2 - bw / 2, y: H - 76, w: bw, h: bh };
+    ctx.save();
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.9)';
+    roundRectPath(ctx, sidebarBtn.x, sidebarBtn.y, sidebarBtn.w, sidebarBtn.h, bh / 2);
+    ctx.fill();
+    ctx.strokeStyle = '#e0a35a';
+    ctx.lineWidth = 1;
+    ctx.stroke();
+    ctx.font = '15px sans-serif';
+    ctx.fillStyle = '#8a5a2b';
+    ctx.fillText('加入侧边栏 · 下次快速进入', W / 2, sidebarBtn.y + bh / 2);
+    ctx.restore();
+  }
 }
 
 // 绘制一张菜单卡片（enabled=false 时置灰并显示“即将到来”标签）
@@ -1634,13 +1657,13 @@ function draw() {
 }
 
 // 小游戏渲染循环：优先用 canvas.requestAnimationFrame（Canvas 2D 节点方法，官方推荐）
-// 该环境（基础库 3.17.6 / 模拟器）下全局与 wx.requestAnimationFrame 均未注入，故挂在 canvas 上最稳
+// 该环境（基础库 3.17.6 / 模拟器）下全局与平台 raf 均未注入，故挂在 canvas 上最稳
 function raf(cb) {
   if (typeof canvas !== 'undefined' && typeof canvas.requestAnimationFrame === 'function') {
     return canvas.requestAnimationFrame(cb);
   }
-  if (typeof wx !== 'undefined' && typeof wx.requestAnimationFrame === 'function') {
-    return wx.requestAnimationFrame(cb);
+  if (typeof adapter.requestAnimationFrame === 'function') {
+    return adapter.requestAnimationFrame(cb);
   }
   if (typeof requestAnimationFrame === 'function') {
     return requestAnimationFrame(cb);
@@ -1685,7 +1708,7 @@ function getPoint(e) {
   return { x, y };
 }
 
-wx.onTouchStart((e) => {
+adapter.onTouchStart((e) => {
   const p = getPoint(e);
   if (!p) return;
   const px = p.x, py = p.y;
@@ -1694,8 +1717,8 @@ wx.onTouchStart((e) => {
   // 并全局关闭静音开关，避免 iPhone 静音键/系统策略导致无声音。
   if (!touchUnlocked) {
     touchUnlocked = true;
-    if (wx.setInnerAudioOption) {
-      try { wx.setInnerAudioOption({ obeyMuteSwitch: false, mixWithOther: true }); } catch (e) {}
+    if (adapter.setInnerAudioOption) {
+      try { adapter.setInnerAudioOption({ obeyMuteSwitch: false, mixWithOther: true }); } catch (e) {}
     }
     unlockAudio();
   }
@@ -1704,6 +1727,7 @@ wx.onTouchStart((e) => {
     // 找字母：进入原首页（主页）；拼单词：进入年级选择
     if (hit(navFindBtn, px, py)) { state = 'home'; return; }
     if (hit(navSpellBtn, px, py)) { state = 'grade'; gradeScrollY = 0; return; }
+    if (hit(sidebarBtn, px, py)) { sidebar.navigate(); return; }
   } else if (state === 'grade') {
     if (hit(backBtn, px, py)) { state = 'nav'; return; }
     // 册数较多时列表可滚动：按下先记录命中卡片，抬手且未判定为滑动才真正进入，
@@ -1768,7 +1792,7 @@ wx.onTouchStart((e) => {
     if (hit(exitConfirmBtn, px, py)) {
       // 确定退出：保存最高分并返回导航页
       best = Math.max(best, score);
-      wx.setStorageSync('letterdrop_best', best);
+      adapter.setStorageSync('letterdrop_best', best);
       state = 'nav';
       return;
     }
@@ -1793,7 +1817,7 @@ wx.onTouchStart((e) => {
 });
 
 // 列表上下拖动滚动（grade / chapter / wordList 三个状态生效）
-wx.onTouchMove((e) => {
+adapter.onTouchMove((e) => {
   if (state !== 'grade' && state !== 'chapter' && state !== 'wordList') { lastTouchY = null; return; }
   const p = getPoint(e);
   if (!p) return;
@@ -1834,7 +1858,7 @@ wx.onTouchMove((e) => {
   lastTouchY = p.y;
 });
 
-wx.onTouchEnd(() => {
+adapter.onTouchEnd(() => {
   if (state === 'grade' && !gradeTouchMoved && gradePendingCard) {
     const id = gradePendingCard;
     gradePendingCard = null;
