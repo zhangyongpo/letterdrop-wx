@@ -1,3 +1,5 @@
+// Copyright (c) 2026 zhangyongpo. SPDX-License-Identifier: Apache-2.0
+// 本文件为 letterdrop-wx 项目独立开发源码；许可证见 LICENSE，第三方资产声明见 NOTICE.md。
 // utils/audio.js
 // 播放字母 A~Z 的读音（主包 /assets/audio/<字母>.mp3）与单词真实发音（年级分包内 mp3）。
 // 全部资源随包分发、下载后由客户端本地缓存，完全离线，无网络请求 / 无后端。

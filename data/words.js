@@ -1,3 +1,5 @@
+// Copyright (c) 2026 zhangyongpo. SPDX-License-Identifier: Apache-2.0
+// 本文件为 letterdrop-wx 项目独立开发源码；许可证见 LICENSE，第三方资产声明见 NOTICE.md。
 // data/words.js
 // 外研剑桥《Join In 三年级上册》（2024 秋版）单词表，按单元整理，含中文释义。
 // 用于“拼单词”模式。注意：含空格的短语（如 good morning）不适合逐字母拼写，

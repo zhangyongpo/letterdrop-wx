@@ -19,7 +19,7 @@
         "type": "file"
       },
       {
-        "value": "LICENSE",
+        "value": "APPEAL.md",
         "type": "file"
       },
       {
@@ -37,16 +37,24 @@
       {
         "value": "platform/tt",
         "type": "folder"
+      },
+      {
+        "value": ".gitignore",
+        "type": "file"
+      },
+      {
+        "value": "project.private.config.json",
+        "type": "file"
       }
     ],
     "include": []
   },
   "setting": {
     "urlCheck": false,
-    "es6": true,
-    "enhance": true,
-    "postcss": true,
-    "minified": true,
+    "es6": false,
+    "enhance": false,
+    "postcss": false,
+    "minified": false,
     "newFeature": true,
     "bigPackageSizeSupport": true,
     "compileWorklet": false,
@@ -54,8 +62,8 @@
     "uploadWithSourceMap": true,
     "packNpmManually": false,
     "packNpmRelationList": [],
-    "minifyWXSS": true,
-    "minifyWXML": true,
+    "minifyWXSS": false,
+    "minifyWXML": false,
     "localPlugins": false,
     "disableUseStrict": false,
     "useCompilerPlugins": false,

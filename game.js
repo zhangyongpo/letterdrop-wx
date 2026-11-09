@@ -1,3 +1,5 @@
+// Copyright (c) 2026 zhangyongpo. SPDX-License-Identifier: Apache-2.0
+// 本文件为 letterdrop-wx 项目独立开发源码；许可证见 LICENSE，第三方资产声明见 NOTICE.md。
 // game.js —— 双端小游戏版（微信 / 抖音，原生 Canvas 2D，无 DOM / 无 WXML）
 // 玩法：App 报出目标字母读音，屏幕上 6 个字母（3列×2排）掉落，
 // 玩家在落地前点中正确字母消除；不区分大小写；点错（干扰项）扣分（不低于0）；

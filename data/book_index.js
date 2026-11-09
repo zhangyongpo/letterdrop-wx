@@ -1,3 +1,5 @@
+// Copyright (c) 2026 zhangyongpo. SPDX-License-Identifier: Apache-2.0
+// 本文件为 letterdrop-wx 项目独立开发源码；许可证见 LICENSE，第三方资产声明见 NOTICE.md。
 // data/book_index.js
 // 词库总索引：把六册教材（2024 审定外研剑桥 Join In，三年级起点）统一编号，
 // 供 game.js 做年级切换、供 tools/dump_audio_words.js 生成发音清单。

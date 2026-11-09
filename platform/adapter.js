@@ -1,3 +1,5 @@
+// Copyright (c) 2026 zhangyongpo. SPDX-License-Identifier: Apache-2.0
+// 本文件为 letterdrop-wx 项目独立开发源码；许可证见 LICENSE，第三方资产声明见 NOTICE.md。
 // platform/adapter.js
 // 双端统一入口：微信小游戏 -> wx，抖音小游戏 -> tt。
 // 游戏代码只依赖 adapter.*，不再直接引用平台全局对象。

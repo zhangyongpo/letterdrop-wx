@@ -1,3 +1,5 @@
+// Copyright (c) 2026 zhangyongpo. SPDX-License-Identifier: Apache-2.0
+// 本文件为 letterdrop-wx 项目独立开发源码；许可证见 LICENSE，第三方资产声明见 NOTICE.md。
 // platform/sidebar.js
 // 抖音小游戏「侧边栏复访」必接能力：包内需出现 tt.navigateToScene 调用，
 // 且游戏内要有可见入口（导航页底部按钮）。微信端 available() 恒为 false，

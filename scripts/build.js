@@ -19,6 +19,7 @@ const PLATFORMS = ['wx', 'tt'];
 // 打进两端产物的共享内容。platform/tt/ 只放配置，不打进产物。
 const SHARED = [
   'game.js',
+  'LICENSE', 'NOTICE.md',
   'config', 'data', 'utils', 'assets', 'subpackages',
   'platform/adapter.js', 'platform/sidebar.js'
 ];

@@ -1,3 +1,5 @@
+// Copyright (c) 2026 zhangyongpo. SPDX-License-Identifier: Apache-2.0
+// 本文件为 letterdrop-wx 项目独立开发源码；许可证见 LICENSE，第三方资产声明见 NOTICE.md。
 // data/words_b34.js
 // 外研剑桥《Join In》（三年级起点，2024 国家教材委员会审核通过）三/四年级下册词表。
 // 与项目现有 data/words.js（三上 2024 秋版）、data/words_g456.js（四上 2025 秋版等）
