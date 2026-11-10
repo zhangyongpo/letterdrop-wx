@@ -94,8 +94,8 @@ bgGrad.addColorStop(1, '#ffe0b2');
 // state: 'nav' | 'home' | 'playing' | 'gameover' | 'confirmExit'
 //         | 'grade' | 'loading' | 'loadFail' | 'chapter' | 'spellMode'
 //         | 'spell' | 'wordList' | 'match'
-//   nav         —— 模式选择导航页（找字母暂置灰「即将到来」/ 拼单词可进入）
-//   home        —— 找字母模式主页（入口暂关，代码保留，见 FIND_LETTER_ENABLED）
+//   nav         —— 模式选择导航页（找字母 / 拼单词 两个模式均可进入）
+//   home        —— 找字母模式主页（由 FIND_LETTER_ENABLED 控制是否开放）
 //   playing     —— 找字母游戏中
 //   confirmExit —— 找字母游戏中点击“退出”后的二次确认弹框（游戏暂停）
 //   grade       —— 拼单词：一级菜单（三~六年级共 6 册，卡片可上下滑动）

@@ -5,9 +5,10 @@
 
 const LETTERS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('');
 
-// 找字母模式是否开放。暂时关闭：导航页卡片置灰并显示「即将到来」，点击不进入。
-// 恢复时改回 true 即可，玩法代码（home / playing / gameover 等状态）一直保留、无需重写。
-const FIND_LETTER_ENABLED = false;
+// 找字母模式是否开放。false 时导航页卡片置灰并显示「即将到来」，点击不进入。
+// 玩法代码（home / playing / gameover 等状态）一直保留，切换开关无需重写逻辑。
+// 双端共用本配置，改动后需重新执行 node scripts/build.js 重建产物。
+const FIND_LETTER_ENABLED = true;
 
 const GROUP_SIZE = 6;          // 每组掉落的字母数量
 const COLS = 3;                // 每排列数（每组分两排，每排 3 个）
