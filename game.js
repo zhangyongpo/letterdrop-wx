@@ -8,7 +8,9 @@
 
 const {
   LETTERS, GROUP_SIZE, COLS, MAX_TARGET_COUNT, GROUPS_PER_LEVEL,
-  MAX_LIVES, CORRECT_SCORE, WRONG_PENALTY, speedForLevel, FIND_LETTER_ENABLED
+  MAX_LIVES, CORRECT_SCORE, WRONG_PENALTY, speedForLevel, FIND_LETTER_ENABLED,
+  LINK_WORD_MIN, LINK_WORD_MAX, LINK_FILL_RATIO,
+  LINK_GRID_COLS, LINK_GRID_ROWS, LINK_MAX_WORD_LEN, LINK_DEFAULT_LOWERCASE
 } = require('./config/gameConfig');
 const {
   announceLetter, announceWord, speakWord, unlockAudio,
@@ -16,6 +18,7 @@ const {
 } = require('./utils/audio');
 const adapter = require('./platform/adapter');
 const sidebar = require('./platform/sidebar');
+const { buildPath: linkBuildPath } = require('./utils/link');
 
 // 英文印刷体（Andika，SIL 出品，OFL 开源可商用），专为初学者识字设计，字母形态清晰规范，
 // 小写 a/g 为课本标准双体结构，最贴近小学英语书写印刷体。用于拼单词页。
@@ -93,7 +96,7 @@ bgGrad.addColorStop(1, '#ffe0b2');
 // ---- 游戏状态 ----
 // state: 'nav' | 'home' | 'playing' | 'gameover' | 'confirmExit'
 //         | 'grade' | 'loading' | 'loadFail' | 'chapter' | 'spellMode'
-//         | 'spell' | 'wordList' | 'match'
+//         | 'spell' | 'wordList' | 'match' | 'link'
 //   nav         —— 模式选择导航页（找字母 / 拼单词 两个模式均可进入）
 //   home        —— 找字母模式主页（由 FIND_LETTER_ENABLED 控制是否开放）
 //   playing     —— 找字母游戏中
@@ -102,8 +105,9 @@ bgGrad.addColorStop(1, '#ffe0b2');
 //   loading     —— 年级发音分包下载中（进度条）
 //   loadFail    —— 分包下载失败（可重试 / 仍要进入，发音回退逐字母拼读）
 //   chapter     —— 拼单词：二级菜单（具体章节 + 全部章节）
-//   spellMode   —— 练习模式选择（听音拼 / 中文转 / 查阅 / 对对碰）
+//   spellMode   —— 练习模式选择（听音拼 / 中文转 / 查阅 / 对对碰 / 字母连连）
 //   spell       —— 拼单词：拼写练习（含答对后的弹框）
+//   link        —— 字母连连：字母网格拖动连线找单词（含答对弹框与完成态）
 let state = 'nav';
 let best = adapter.getStorageSync('letterdrop_best') || 0;
 let score = 0;
@@ -181,6 +185,37 @@ let matchChapterName = '';       // 章节名（标题展示）
 let FLIP_DUR = 380;              // 配对成功翻转消失动画时长(ms)
 // 对对碰块字号/内边距（测量宽度与绘制共用，保证宽度自适应下字体大小一致）
 const MATCH_EN_FS = 30, MATCH_CN_FS = 28, MATCH_PAD = 14;
+
+// ---- 字母连连（link）相关状态 ----
+// 弹框复用 drawSpellDialog(opts)，按钮区域沿用 spellDialogSpeakBtn / spellNextBtn；
+// 同一时刻只会有一种弹框，不会与拼写练习冲突。
+let linkCols = LINK_GRID_COLS;     // 网格列数（每行几个字母）
+let linkRows = LINK_GRID_ROWS;     // 网格行数（比早期版本多 2 行）
+let linkGrid = [];                 // 网格字母（大写字符串数组）
+let linkCellRects = [];            // 每格可点区域 {x,y,w,h}
+let linkTargets = [];              // 目标词 [{en, cn, found, cells}]
+let linkPath = [];                 // 本次拖动经过的格子下标
+let linkDragging = false;          // 是否正在拖动连线
+let linkLastPoint = null;          // 上一个触点（拖动插值用，避免快速划过漏格）
+let linkSolved = false;            // 连对弹框是否显示
+let linkDone = false;              // 是否全部找齐
+let linkFoundWord = '';            // 刚连对的单词（弹框显示）
+let linkFoundCn = '';              // 刚连对的中文释义（弹框显示）
+let linkMsg = '';                  // 连错时的短暂提示
+let linkMsgTimer = 0;              // 提示剩余显示时间(ms)
+let linkBackBtn = null;            // 返回按钮（左上角）
+let linkCaseBtn = null;            // 大小写版本切换按钮（右上角）
+// 当前字母版本：false = 大写版(A~Z)，true = 小写英文版(a~z)。
+// 仅控制网格字母的显示形态；linkGrid 内部始终存大写，判定统一转小写比较，互不影响。
+// 不随 startLink() 重置，玩家切换一次后在本次游戏会话内保持。
+let linkLowercase = LINK_DEFAULT_LOWERCASE;
+let linkChapterName = '';          // 章节名（标题展示）
+let linkListTop = 0;               // 底部释义列表可视区上沿
+let linkListBottom = 0;            // 底部释义列表可视区下沿
+let linkListContentH = 0;          // 释义列表内容总高（含折行）
+let linkListScrollY = 0;           // 释义列表滚动偏移
+let linkListDragging = false;      // 是否正在拖动释义列表（与网格连线互斥）
+let linkListLastY = null;          // 拖动释义列表时的上一个触点 Y
 
 // ---- 流程控制 ----
 function startGame() {
@@ -1078,20 +1113,21 @@ function drawSpellMode() {
   ctx.fillStyle = '#5a2d00';
   ctx.fillText('选择练习模式', W / 2, H * 0.15);
 
-  // 模式卡片（上下排布：听音拼单词 / 中文转单词 / 全部单词 / 单词对对碰）
+  // 模式卡片（上下排布：听音拼单词 / 中文转单词 / 全部单词 / 对对碰 / 字母连连）
   const cardW = Math.min(360, W - 80);
   const modes = [
     { mode: 'listen', title: '听音拼单词', sub: '听发音，拼出单词' },
     { mode: 'cn', title: '中文转单词', sub: '看中文意思，拼出单词' },
     { mode: 'words', title: '全部单词', sub: '浏览本单元所有单词' },
     { mode: 'match', title: '单词对对碰', sub: '点英文卡听发音，英中配对消除' },
+    { mode: 'link', title: '字母连连', sub: '拖动字母连成单词' },
   ];
   const n = modes.length;
-  // 卡片高度自适应：保证从标题区下到屏幕底能完整放下 n 张（不溢出小屏）
-  const topY = H * 0.22;
+  // 卡片高度自适应：5 张卡时收紧间距与最小高度，保证小屏也能完整放下（不溢出）
+  const topY = H * 0.205;
   const bottomPad = 20;
-  const gap = 16;
-  const cardH = Math.max(72, Math.min(96, (H - topY - bottomPad - gap * (n - 1)) / n));
+  const gap = n >= 5 ? 10 : 16;
+  const cardH = Math.max(62, Math.min(96, (H - topY - bottomPad - gap * (n - 1)) / n));
   const startY = topY;
 
   spellModeCards = [];
@@ -1585,8 +1621,346 @@ function drawSpell() {
   if (spellSolved) drawSpellDialog();
 }
 
+// ============ 字母连连（link）============
+// 玩法：从章节词库抽词，把每个词的字母按「横 / 竖 / 一次转弯的 L 形」路径摆进 N×N 网格，
+// 剩余格子填干扰字母；玩家按住拖动经过上下左右相邻的格子，松手时把路径字母拼成字符串，
+// 命中未找到的目标词即判定连对（正向、反向都算，允许从词尾往回连）。
+// 字母版本：右上角按钮可在「大写版 A~Z」与「小写英文版 a~z」间切换，
+// 只改网格字母（含干扰字母）的显示形态与连对弹框里的单词；
+// 内部 linkGrid 恒为大写、判定恒转小写比较，底部中文提示始终显示中文。
+
+// 路径生成算法抽到 utils/link.js（纯函数，不依赖平台 API，可单独校验）
+
+// 进入「字母连连」：抽词 → 放置路径 → 填干扰字母 → 计算网格坐标
+function startLink(chapterId) {
+  const ch = SPELL_CHAPTERS.find((c) => c.id === chapterId);
+  linkChapterName = ch ? ch.name : '';
+  const words = getChapterWordsPlain(chapterId).filter((w) =>
+    /^[a-z]+$/i.test(w.en) && w.en.length >= 2 && w.en.length <= LINK_MAX_WORD_LEN
+  );
+  if (words.length === 0) { state = 'spellMode'; return; }
+
+  // 与对对碰一致：若此前分包下载失败选了「仍要进入」，这里静默补下载
+  if (!isGradeReady(currentGradeId)) loadGradeAudio(currentGradeId);
+
+  const cols = LINK_GRID_COLS;
+  const rows = LINK_GRID_ROWS;
+  linkCols = cols;
+  linkRows = rows;
+  linkGrid = new Array(cols * rows).fill('');
+  const occupied = new Set();
+  linkTargets = [];
+
+  // 目标词数量按单词长度动态决定：短词多放、长词少放。
+  // 收手条件 = 已占用格数达到网格容量的 LINK_FILL_RATIO（其余留作干扰字母），
+  // 同时保证不少于 LINK_WORD_MIN 个、不多于 LINK_WORD_MAX 个；
+  // 后期网格拥挤时个别词放不下会自动跳过，用后面的候选补上。
+  const cellBudget = Math.round(cols * rows * LINK_FILL_RATIO);
+  const candidates = shuffled(words);
+  // 候选上限跟随章节实际词数（大章节不因固定次数被截断），但设 120 封顶防极端耗时
+  const maxTries = Math.min(candidates.length, 120);
+  let tries = 0;
+  for (const w of candidates) {
+    if (linkTargets.length >= LINK_WORD_MAX) break;
+    if (linkTargets.length >= LINK_WORD_MIN && occupied.size >= cellBudget) break;
+    if (++tries > maxTries) break;
+    const upper = w.en.toUpperCase();
+    const path = linkBuildPath(cols, rows, upper.length, occupied);
+    if (!path) continue;                         // 放不下就跳过该词
+    for (let k = 0; k < upper.length; k++) linkGrid[path[k]] = upper[k];
+    path.forEach((i) => occupied.add(i));
+    linkTargets.push({ en: w.en.toLowerCase(), cn: w.cn || '', found: false, cells: [] });
+  }
+  if (linkTargets.length === 0) { state = 'spellMode'; return; }
+
+  // 干扰字母：七成取自目标词字母池（更像真词），三成取随机字母
+  const pool = linkTargets.map((t) => t.en.toUpperCase()).join('').split('');
+  for (let i = 0; i < linkGrid.length; i++) {
+    if (linkGrid[i]) continue;
+    linkGrid[i] = (pool.length && Math.random() < 0.7)
+      ? pool[Math.floor(Math.random() * pool.length)]
+      : LETTERS[Math.floor(Math.random() * LETTERS.length)];
+  }
+
+  // 网格布局：rows 行 × cols 列（行数比列数多），底部为释义列表预留固定空间；
+  // 格子同时受可用宽、高约束，行再加多也不会把中文挤出屏幕（超出部分可滑动）。
+  const padX = 16;
+  const gap = 6;
+  const gridTop = Math.round(H * 0.22);
+  const bottomReserve = Math.min(120, H * 0.20);
+  const availW = W - padX * 2;
+  const availH = Math.max(120, H - gridTop - bottomReserve - 12);
+  const cell = Math.max(24, Math.min(
+    (availW - gap * (cols - 1)) / cols,
+    (availH - gap * (rows - 1)) / rows
+  ));
+  const gridW = cols * cell + gap * (cols - 1);
+  const gridX = W / 2 - gridW / 2;
+  linkCellRects = [];
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < cols; c++) {
+      linkCellRects.push({
+        x: gridX + c * (cell + gap),
+        y: gridTop + r * (cell + gap),
+        w: cell, h: cell
+      });
+    }
+  }
+
+  linkPath = [];
+  linkDragging = false;
+  linkLastPoint = null;
+  linkListScrollY = 0;
+  linkListDragging = false;
+  linkListLastY = null;
+  linkSolved = false;
+  linkDone = false;
+  linkMsg = '';
+  linkMsgTimer = 0;
+  state = 'link';
+}
+
+function linkCellIndexAt(px, py) {
+  // 向外放宽 3px：手指划过格子间隙时不中断连线（间隙本身只有 6px）
+  const PAD = 3;
+  for (let i = 0; i < linkCellRects.length; i++) {
+    const r = linkCellRects[i];
+    if (px >= r.x - PAD && px <= r.x + r.w + PAD &&
+        py >= r.y - PAD && py <= r.y + r.h + PAD) return i;
+  }
+  return -1;
+}
+
+// 只允许上下左右相邻，不允许斜连
+function linkAdjacent(a, b) {
+  const ra = Math.floor(a / linkCols), ca = a % linkCols;
+  const rb = Math.floor(b / linkCols), cb = b % linkCols;
+  return Math.abs(ra - rb) + Math.abs(ca - cb) === 1;
+}
+
+function linkExtendPath(idx) {
+  if (linkPath.length === 0) { linkPath.push(idx); return; }
+  const last = linkPath[linkPath.length - 1];
+  if (idx === last) return;
+  if (linkPath.length >= 2 && idx === linkPath[linkPath.length - 2]) {
+    linkPath.pop();                            // 往回划 = 撤销上一格
+    return;
+  }
+  if (linkPath.indexOf(idx) >= 0) return;     // 路径不自交
+  if (linkAdjacent(last, idx)) linkPath.push(idx);
+}
+
+// 松手结算：路径字母拼成单词，命中未找到的目标词则连对
+function resolveLinkPath() {
+  const cells = linkPath.slice();
+  linkPath = [];
+  if (cells.length < 2) return;
+  const s = cells.map((i) => linkGrid[i]).join('').toLowerCase();
+  const rev = s.split('').reverse().join('');
+  const t = linkTargets.find((x) => !x.found && (x.en === s || x.en === rev));
+  if (!t) {
+    linkMsg = '再试试';
+    linkMsgTimer = 900;
+    return;
+  }
+  t.found = true;
+  t.cells = cells;
+  // 连对后列表会重排（未找到的顶到前面），顺手回到顶部，省掉一次手动滑回
+  linkListScrollY = 0;
+  linkFoundWord = t.en;
+  linkFoundCn = t.cn;
+  linkSolved = true;
+  linkDone = linkTargets.every((x) => x.found);
+  speakWord(t.en);                             // 连对即播一遍真实发音
+}
+
+function drawLink() {
+  ctx.fillStyle = bgGrad;
+  ctx.fillRect(0, 0, W, H);
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+
+  linkBackBtn = { x: 14, y: 14, w: 52, h: 40 };
+  drawBackButton(linkBackBtn);
+
+  // 右上角：字母版本切换。只改网格字母显示（大写 A~Z / 小写 a~z），
+  // 底部中文提示与连线判定都不受影响；切换后不重置本局进度，可随时来回切。
+  linkCaseBtn = { x: W - 14 - 84, y: 14, w: 84, h: 40 };
+  const cb = linkCaseBtn;
+  ctx.fillStyle = linkLowercase ? 'rgba(255,204,128,0.95)' : 'rgba(255,255,255,0.9)';
+  roundRectPath(ctx, cb.x, cb.y, cb.w, cb.h, 10);
+  ctx.fill();
+  ctx.lineWidth = 1.5;
+  ctx.strokeStyle = 'rgba(90,45,0,0.22)';
+  roundRectPath(ctx, cb.x, cb.y, cb.w, cb.h, 10);
+  ctx.stroke();
+  ctx.fillStyle = '#5a2d00';
+  ctx.font = 'bold 17px ' + (SPELL_FONT || 'sans-serif');
+  ctx.fillText(linkLowercase ? 'aa' : 'Aa', cb.x + cb.w * 0.26, cb.y + cb.h / 2);
+  ctx.font = '13px sans-serif';
+  ctx.fillText(linkLowercase ? '小写版' : '大写版', cb.x + cb.w * 0.68, cb.y + cb.h / 2);
+
+  ctx.fillStyle = '#5a2d00';
+  ctx.font = 'bold ' + Math.min(30, W * 0.08) + 'px sans-serif';
+  ctx.fillText('字母连连', W / 2, Math.round(H * 0.09));
+  ctx.fillStyle = '#8a5a2b';
+  ctx.font = Math.min(17, W * 0.042) + 'px sans-serif';
+  ctx.fillText('拖动连成单词 · 横 / 竖 / 转弯 · 释义可滑动', W / 2, Math.round(H * 0.145));
+  // 连错提示与章节名共用该行，避免文字叠在一起
+  if (linkMsgTimer > 0 && linkMsg) {
+    ctx.fillStyle = '#d84315';
+    ctx.font = 'bold ' + Math.min(19, W * 0.048) + 'px sans-serif';
+    ctx.fillText(linkMsg, W / 2, Math.round(H * 0.185));
+  } else if (linkChapterName) {
+    ctx.font = Math.min(15, W * 0.038) + 'px sans-serif';
+    ctx.fillText(linkChapterName, W / 2, Math.round(H * 0.185));
+  }
+
+  const cellW = linkCellRects.length ? linkCellRects[0].w : 40;
+  const radius = Math.min(12, cellW * 0.22);
+
+  // 画一条路径连线（已找到的用浅绿，正在拖的用橙色）
+  function drawPathLine(cells, color) {
+    if (!cells || cells.length < 2) return;
+    ctx.beginPath();
+    cells.forEach((idx, k) => {
+      const r = linkCellRects[idx];
+      if (!r) return;
+      const cx = r.x + r.w / 2, cy = r.y + r.h / 2;
+      if (k === 0) ctx.moveTo(cx, cy); else ctx.lineTo(cx, cy);
+    });
+    ctx.lineWidth = Math.max(8, cellW * 0.24);
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    ctx.strokeStyle = color;
+    ctx.stroke();
+  }
+
+  const foundSet = new Set();
+  linkTargets.forEach((t) => { if (t.found) t.cells.forEach((i) => foundSet.add(i)); });
+  const pathSet = new Set(linkPath);
+
+  // 1) 格子底色与边框
+  linkCellRects.forEach((r, i) => {
+    let fill = '#ffffff';
+    if (foundSet.has(i)) fill = '#c8e6c9';
+    if (pathSet.has(i)) fill = '#ffcc80';
+    ctx.fillStyle = fill;
+    roundRectPath(ctx, r.x, r.y, r.w, r.h, radius);
+    ctx.fill();
+    ctx.lineWidth = 1.5;
+    ctx.strokeStyle = foundSet.has(i) ? '#66bb6a'
+      : (pathSet.has(i) ? '#ff7a18' : 'rgba(120,80,40,0.18)');
+    roundRectPath(ctx, r.x, r.y, r.w, r.h, radius);
+    ctx.stroke();
+  });
+
+  // 2) 连线（在格子之上、字母之下）
+  linkTargets.forEach((t) => { if (t.found) drawPathLine(t.cells, 'rgba(56,142,60,0.45)'); });
+  drawPathLine(linkPath, 'rgba(255,122,24,0.55)');
+
+  // 3) 字母：linkGrid 内部一律存大写，这里只按当前版本决定显示形态
+  ctx.font = 'bold ' + Math.min(30, cellW * 0.56) + 'px ' + (SPELL_FONT || 'sans-serif');
+  ctx.fillStyle = '#5a2d00';
+  linkCellRects.forEach((r, i) => {
+    const ch = linkLowercase ? linkGrid[i].toLowerCase() : linkGrid[i];
+    ctx.fillText(ch, r.x + r.w / 2, r.y + r.h / 2);
+  });
+
+  // 4) 底部目标词提示：仍为 2 列、每行几个与文案截断逻辑不变，但按「未找到在前、
+  //    已找到沉底」动态排序，让用户视线固定在最上面几行，尽量少滑动。
+  //    词数按词长动态变化，行高/字号跟着自适应，尽量让全部中文一屏放下；
+  //    仅这一块区域可上下拖动（网格区拖动作连线），真放不下时才「滑出来」。
+  const lastCell = linkCellRects[linkCellRects.length - 1];
+  linkListTop = (lastCell ? lastCell.y + cellW + 12 : Math.round(H * 0.70));
+  linkListBottom = H - 12;
+  const listCols = 2;
+  const listColW = (W - 32) / listCols;
+  const listH = Math.max(0, linkListBottom - linkListTop);
+  const listRows = Math.max(1, Math.ceil(linkTargets.length / listCols));
+  const listRowH = Math.max(24, Math.min(34, listH / listRows));
+  const listFont = Math.max(13, Math.min(19, W * 0.048, listRowH * 0.62));
+  linkListContentH = listRows * listRowH;
+
+  const linkMaxScroll = Math.max(0, linkListContentH - listH);
+  if (linkListScrollY < 0) linkListScrollY = 0;
+  if (linkListScrollY > linkMaxScroll) linkListScrollY = linkMaxScroll;
+
+  // 需要滚动时给释义区一块浅底，提示「这一块可以上下滑」
+  if (linkMaxScroll > 0 && listH > 0) {
+    ctx.fillStyle = 'rgba(255,255,255,0.22)';
+    roundRectPath(ctx, 8, linkListTop, W - 16, listH, 10);
+    ctx.fill();
+  }
+
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(0, linkListTop, W, listH);
+  ctx.clip();
+  ctx.font = listFont + 'px sans-serif';
+  // 动态排序：未找到的顶到前面，连对过的自动沉到末尾。
+  // 只改显示顺序，不动 linkTargets 原数组（结算与已找到连线仍按原数组）。
+  const shownTargets = linkTargets
+    .filter((t) => !t.found)
+    .concat(linkTargets.filter((t) => t.found));
+  shownTargets.forEach((t, i) => {
+    const cx = 16 + (i % listCols) * listColW + listColW / 2;
+    const cy = linkListTop + Math.floor(i / listCols) * listRowH + listRowH / 2 - linkListScrollY;
+    ctx.fillStyle = t.found ? '#2e7d32' : '#8a5a2b';
+    // 释义过长会在两列布局里溢出，统一截断到 7 字；连对后仍显示中文并打勾，
+    // 不替换成英文单词——大小写版本切换只作用于网格字母。
+    const hint = String(t.cn || t.en).slice(0, 7);
+    ctx.fillText(t.found ? '✓ ' + hint : hint + '（' + t.en.length + '）', cx, cy);
+  });
+  ctx.restore();
+
+  // 内容超出可视区时画细滚动条，提示「还能往下滑」
+  if (linkMaxScroll > 0 && listH > 0) {
+    const barH = Math.max(24, listH * listH / linkListContentH);
+    const barY = linkListTop + (listH - barH) * (linkListScrollY / linkMaxScroll);
+    ctx.fillStyle = 'rgba(120,80,40,0.28)';
+    roundRectPath(ctx, W - 7, barY, 3, barH, 2);
+    ctx.fill();
+  }
+
+  // 全部找齐后的完成态（弹框关闭后显示）
+  if (linkDone && !linkSolved) {
+    ctx.fillStyle = 'rgba(0,0,0,0.45)';
+    ctx.fillRect(0, 0, W, H);
+    const cw = Math.min(320, W - 50), chh = 180;
+    const cx = W / 2 - cw / 2, cy = H / 2 - chh / 2;
+    ctx.fillStyle = '#ffffff';
+    roundRectPath(ctx, cx, cy, cw, chh, 24);
+    ctx.fill();
+    ctx.fillStyle = '#2e7d32';
+    ctx.font = 'bold 32px sans-serif';
+    ctx.fillText('全部找齐！', W / 2, cy + 66);
+    ctx.fillStyle = '#8a5a2b';
+    ctx.font = '22px sans-serif';
+    ctx.fillText('点击任意处返回', W / 2, cy + 124);
+  }
+
+  // 连对弹框：复用拼写练习的弹框，仅标题 / 内容 / 按钮文案不同。
+  // 弹框里的单词跟随当前字母版本显示（大写版 CAT / 小写版 cat），
+  // 发音仍按词库原始小写 en 查找音频文件。
+  if (linkSolved) {
+    drawSpellDialog({
+      title: '连对啦！',
+      word: linkLowercase ? linkFoundWord.toLowerCase() : linkFoundWord.toUpperCase(),
+      meaning: linkFoundCn,
+      nextLabel: '继续'
+    });
+  }
+}
+
 // 答对后的弹框：显示单词与中文释义，附“下一个”按钮
-function drawSpellDialog() {
+// opts 可选：{title, word, meaning, nextLabel}，不传时保持拼写练习原行为
+function drawSpellDialog(opts) {
+  const o = opts || {};
+  const word = (o.word !== undefined) ? o.word : spellWord;
+  const meaning = (o.meaning !== undefined) ? o.meaning : spellMeaning;
+  const title = o.title || '拼对啦！';
+  const nextLabel = o.nextLabel || '下一个';
   ctx.fillStyle = 'rgba(0,0,0,0.45)';
   ctx.fillRect(0, 0, W, H);
 
@@ -1602,15 +1976,15 @@ function drawSpellDialog() {
   ctx.textBaseline = 'middle';
   ctx.fillStyle = '#2e7d32';
   ctx.font = 'bold 32px sans-serif';
-  ctx.fillText('拼对啦！', W / 2, cardY + 50);
+  ctx.fillText(title, W / 2, cardY + 50);
 
   ctx.fillStyle = '#5a2d00';
   ctx.font = 'bold 46px sans-serif';
-  ctx.fillText(spellWord, W / 2, cardY + 116);
+  ctx.fillText(word, W / 2, cardY + 116);
 
   ctx.fillStyle = '#8a5a2b';
   ctx.font = '26px sans-serif';
-  ctx.fillText(spellMeaning, W / 2, cardY + 174);
+  ctx.fillText(meaning, W / 2, cardY + 174);
 
   // 底部两个并排按钮：左“听发音”（白底橙框），右“下一个”（橙底白字）
   const btnH = 64;
@@ -1641,7 +2015,7 @@ function drawSpellDialog() {
   ctx.fill();
   ctx.fillStyle = '#ffffff';
   ctx.font = 'bold 28px sans-serif';
-  ctx.fillText('下一个', rightX + btnW / 2, btnY + btnH / 2);
+  ctx.fillText(nextLabel, rightX + btnW / 2, btnY + btnH / 2);
 }
 
 function draw() {
@@ -1658,6 +2032,7 @@ function draw() {
   else if (state === 'spell') drawSpell();
   else if (state === 'wordList') drawWordList();
   else if (state === 'match') drawMatch();
+  else if (state === 'link') drawLink();
 }
 
 // 小游戏渲染循环：优先用 canvas.requestAnimationFrame（Canvas 2D 节点方法，官方推荐）
@@ -1682,6 +2057,7 @@ function loop() {
   lastTime = now;
   if (scoreBumpTimer > 0) scoreBumpTimer -= dt;
   if (matchMsgTimer > 0) matchMsgTimer -= dt;
+  if (linkMsgTimer > 0) linkMsgTimer -= dt;
   if (state === 'match') {
     let allGone = true;
     for (const b of matchBlocks) {
@@ -1770,6 +2146,7 @@ adapter.onTouchStart((e) => {
       if (hit(item.rect, px, py)) {
         if (item.mode === 'words') enterWordList(spellChapterId);
         else if (item.mode === 'match') startMatch(spellChapterId);
+        else if (item.mode === 'link') startLink(spellChapterId);
         else startSpellChapter(spellChapterId, item.mode);
         return;
       }
@@ -1780,6 +2157,33 @@ adapter.onTouchStart((e) => {
     for (const b of matchBlocks) {
       if (b.removed) continue;
       if (hit(b, px, py)) { onMatchTap(b); return; }
+    }
+  } else if (state === 'link') {
+    // 连对弹框优先响应（按钮区域由 drawSpellDialog 写入，与拼写练习共用）
+    if (linkSolved) {
+      linkDragging = false;
+      linkLastPoint = null;
+      if (hit(spellDialogSpeakBtn, px, py)) { speakWord(linkFoundWord); return; }
+      if (hit(spellNextBtn, px, py)) { linkSolved = false; return; }
+      return;
+    }
+    if (hit(linkBackBtn, px, py)) { state = 'spellMode'; return; }
+    if (linkDone) { state = 'spellMode'; return; }   // 完成态点任意处返回
+    // 大小写版本切换：只翻显示标志，本局网格数据、进度、中文提示都不变
+    if (hit(linkCaseBtn, px, py)) { linkLowercase = !linkLowercase; return; }
+    // 底部释义区按下 = 滚动列表（与网格连线互斥，避免一边滑一边连线）
+    if (linkListTop > 0 && py >= linkListTop && py <= linkListBottom && linkListContentH > 0) {
+      linkListDragging = true;
+      linkListLastY = py;
+      linkDragging = false;
+      linkLastPoint = null;
+      return;
+    }
+    const idx = linkCellIndexAt(px, py);
+    if (idx >= 0) {
+      linkDragging = true;
+      linkPath = [idx];
+      linkLastPoint = { x: px, y: py };
     }
   } else if (state === 'wordList') {
     if (hit(wordListBackBtn, px, py)) { state = 'spellMode'; return; }
@@ -1825,6 +2229,46 @@ adapter.onTouchStart((e) => {
 
 // 列表上下拖动滚动（grade / chapter / wordList 三个状态生效）
 adapter.onTouchMove((e) => {
+  // 字母连连：拖动经过相邻格子时延长连线路径
+  if (state === 'link') {
+    // 释义列表滚动优先：手指上下拖时把剩余中文滑进可视区
+    if (linkListDragging) {
+      const p = getPoint(e);
+      if (p) {
+        if (linkListLastY !== null) {
+          const dy = p.y - linkListLastY;
+          const listH = Math.max(0, linkListBottom - linkListTop);
+          const maxScroll = Math.max(0, linkListContentH - listH);
+          linkListScrollY = Math.max(0, Math.min(maxScroll, linkListScrollY - dy));
+        }
+        linkListLastY = p.y;
+      }
+      lastTouchY = null;
+      return;
+    }
+    if (linkDragging && !linkSolved && !linkDone) {
+      const p = getPoint(e);
+      if (p) {
+        const from = linkLastPoint || p;
+        const dx = p.x - from.x, dy = p.y - from.y;
+        const dist = Math.sqrt(dx * dx + dy * dy);
+        // 按 8px 步长插值：手指快速划过时补齐中间格子，
+        // 否则 touchMove 采样稀疏，会因「必须四邻接」而中途断线。
+        const steps = Math.min(80, Math.max(1, Math.ceil(dist / 8)));
+        for (let s = 1; s <= steps; s++) {
+          const x = from.x + dx * s / steps;
+          const y = from.y + dy * s / steps;
+          const idx = linkCellIndexAt(x, y);
+          if (idx >= 0) linkExtendPath(idx);
+        }
+        linkLastPoint = { x: p.x, y: p.y };
+      }
+    } else {
+      linkLastPoint = null;
+    }
+    lastTouchY = null;
+    return;
+  }
   if (state !== 'grade' && state !== 'chapter' && state !== 'wordList') { lastTouchY = null; return; }
   const p = getPoint(e);
   if (!p) return;
@@ -1866,10 +2310,19 @@ adapter.onTouchMove((e) => {
 });
 
 adapter.onTouchEnd(() => {
+  // 释义列表拖动结束（无论当前什么状态都清掉，避免残留）
+  linkListDragging = false;
+  linkListLastY = null;
   if (state === 'grade' && !gradeTouchMoved && gradePendingCard) {
     const id = gradePendingCard;
     gradePendingCard = null;
     enterGrade(id);
+  }
+  // 字母连连：抬手结算本次连线
+  if (state === 'link' && linkDragging) {
+    linkDragging = false;
+    linkLastPoint = null;
+    resolveLinkPath();
   }
   gradePendingCard = null;
   lastTouchY = null;

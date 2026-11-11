@@ -22,6 +22,21 @@ const WRONG_PENALTY = 1;       // 点错（点到干扰项）扣分
 const BASE_SPEED = 0.09;       // 第 1 档基础下落速度（逻辑像素/毫秒）
 const SPEED_STEP = 0.15;       // 每升一档速度增加的比例
 
+// 字母连连：从章节词库抽词，把字母摆进网格，玩家拖动相邻字母连成单词。
+// 路径允许横连、竖连或一次转弯（L 形）；剩余格子填干扰字母。
+// 每局目标词数量按「单词长度」动态决定：短词多放、长词少放，
+// 以目标词字母累计占用的格数达到网格容量的 LINK_FILL_RATIO 为准（其余留作干扰字母）。
+const LINK_WORD_MIN = 4;       // 每局最少目标词数（长词章节也不会只有两三个）
+const LINK_WORD_MAX = 8;       // 每局最多目标词数（对应中文提示 4 行，仍可一屏放下）
+const LINK_FILL_RATIO = 0.62;  // 目标词字母占用的格数 / 网格总格数
+const LINK_GRID_COLS = 6;      // 网格列数（每行几个字母候选项，保持不变）
+const LINK_GRID_ROWS = 8;      // 网格行数（原 6 行 +2；改成 9 即 +3 行，格子会自动缩小）
+const LINK_MAX_WORD_LEN = 8;   // 参与抽词的最长单词，超过则跳过（避免路径占满网格）
+// 默认字母版本：false = 大写版（网格显示 A~Z），true = 小写英文版（网格显示 a~z）。
+// 只影响「字母连连」网格字母的显示，词库数据与连线判定始终按大写内部值处理；
+// 玩家在页面右上角可随时切换，切换后本次游戏会话内保持。
+const LINK_DEFAULT_LOWERCASE = false;
+
 // 根据速度档计算当前下落速度（无上限，慢慢变快）
 function speedForLevel(level) {
   return BASE_SPEED * (1 + (level - 1) * SPEED_STEP);
@@ -95,5 +110,12 @@ module.exports = {
   BASE_SPEED,
   SPEED_STEP,
   speedForLevel,
+  LINK_WORD_MIN,
+  LINK_WORD_MAX,
+  LINK_FILL_RATIO,
+  LINK_GRID_COLS,
+  LINK_GRID_ROWS,
+  LINK_MAX_WORD_LEN,
+  LINK_DEFAULT_LOWERCASE,
   WORD_BANK
 };
