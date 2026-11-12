@@ -1,7 +1,7 @@
 // Copyright (c) 2026 zhangyongpo. SPDX-License-Identifier: Apache-2.0
 // 本文件为 letterdrop-wx 项目独立开发源码；许可证见 LICENSE，第三方资产声明见 NOTICE.md。
 // utils/link.js —— 字母连连的纯算法：为单词在网格内生成字母路径
-// 不依赖 wx / tt / Canvas 等平台 API，可单独在 Node 下运行与测试。
+// 不依赖 wx / Canvas 等平台 API，可单独在 Node 下运行与测试。
 // 网格为 rows 行 × cols 列（竖屏下行多于列），格子下标 idx = r * cols + c。
 
 const DIRS = [[0, 1], [0, -1], [1, 0], [-1, 0]]; // 右 / 左 / 下 / 上

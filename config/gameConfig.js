@@ -7,7 +7,7 @@ const LETTERS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('');
 
 // 找字母模式是否开放。false 时导航页卡片置灰并显示「即将到来」，点击不进入。
 // 玩法代码（home / playing / gameover 等状态）一直保留，切换开关无需重写逻辑。
-// 双端共用本配置，改动后需重新执行 node scripts/build.js 重建产物。
+// 源码直传改完即生效、无需构建；仅用 dist/wx/ 快照上传时才需重跑 node scripts/build.js。
 const FIND_LETTER_ENABLED = true;
 
 const GROUP_SIZE = 6;          // 每组掉落的字母数量
@@ -36,6 +36,14 @@ const LINK_MAX_WORD_LEN = 8;   // 参与抽词的最长单词，超过则跳过�
 // 只影响「字母连连」网格字母的显示，词库数据与连线判定始终按大写内部值处理；
 // 玩家在页面右上角可随时切换，切换后本次游戏会话内保持。
 const LINK_DEFAULT_LOWERCASE = false;
+
+// 单词听写：每个单词的停留间隔档位（毫秒），由玩家手动选择；
+// 到点自动切到下一个词并循环，上一个/下一个按钮可随时手动干预并重新计时。
+const DICT_INTERVALS = [5000, 10000, 15000, 30000];
+const DICT_DEFAULT_INTERVAL_IDX = 1;   // 默认 10 秒
+// 发音模式：'cn' = 先中文释义后英文单词；'en' = 只念英文；'both' = 先英文后中文；'cnOnly' = 只念中文释义
+const DICT_DEFAULT_MODE = 'cn';
+const DICT_GAP_MS = 650;               // 中文/英文两个片段之间的停顿
 
 // 根据速度档计算当前下落速度（无上限，慢慢变快）
 function speedForLevel(level) {
@@ -117,5 +125,9 @@ module.exports = {
   LINK_GRID_ROWS,
   LINK_MAX_WORD_LEN,
   LINK_DEFAULT_LOWERCASE,
+  DICT_INTERVALS,
+  DICT_DEFAULT_INTERVAL_IDX,
+  DICT_DEFAULT_MODE,
+  DICT_GAP_MS,
   WORD_BANK
 };

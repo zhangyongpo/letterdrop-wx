@@ -36,7 +36,6 @@ const PRIORITY = [
   'game.js',
   'config/gameConfig.js',
   'platform/adapter.js',
-  'platform/sidebar.js',
   'utils/audio.js',
   'scripts/build.js',
   'data/book_index.js',

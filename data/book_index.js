@@ -70,4 +70,9 @@ function packageRoot(gradeId) {
   return '/subpackages/' + gradeId + '/audio/words/';
 }
 
-module.exports = { BOOKS, GRADES, slug, audioWordsFor, audioWordsAll, packageRoot };
+// 中文释义发音与英文同 slug，但单独放在 audio/cn/ 下，避免与英文清单混在一起
+function cnPackageRoot(gradeId) {
+  return '/subpackages/' + gradeId + '/audio/cn/';
+}
+
+module.exports = { BOOKS, GRADES, slug, audioWordsFor, audioWordsAll, packageRoot, cnPackageRoot };

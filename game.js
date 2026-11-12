@@ -1,24 +1,26 @@
 // Copyright (c) 2026 zhangyongpo. SPDX-License-Identifier: Apache-2.0
 // 本文件为 letterdrop-wx 项目独立开发源码；许可证见 LICENSE，第三方资产声明见 NOTICE.md。
-// game.js —— 双端小游戏版（微信 / 抖音，原生 Canvas 2D，无 DOM / 无 WXML）
+// game.js —— 微信小游戏版（原生 Canvas 2D，无 DOM / 无 WXML）
 // 玩法：App 报出目标字母读音，屏幕上 6 个字母（3列×2排）掉落，
 // 玩家在落地前点中正确字母消除；不区分大小写；点错（干扰项）扣分（不低于0）；
 // 目标字母落地漏点扣 1 命；每 10 组速度 +1 档（无上限）；3 命结束。
-// 所有平台 API 统一经 platform/adapter.js 收口，本文件不直接引用 wx / tt。
+// 所有平台 API 统一经 platform/adapter.js 收口，本文件不直接引用 wx。
 
 const {
   LETTERS, GROUP_SIZE, COLS, MAX_TARGET_COUNT, GROUPS_PER_LEVEL,
   MAX_LIVES, CORRECT_SCORE, WRONG_PENALTY, speedForLevel, FIND_LETTER_ENABLED,
   LINK_WORD_MIN, LINK_WORD_MAX, LINK_FILL_RATIO,
-  LINK_GRID_COLS, LINK_GRID_ROWS, LINK_MAX_WORD_LEN, LINK_DEFAULT_LOWERCASE
+  LINK_GRID_COLS, LINK_GRID_ROWS, LINK_MAX_WORD_LEN, LINK_DEFAULT_LOWERCASE,
+  DICT_INTERVALS, DICT_DEFAULT_INTERVAL_IDX, DICT_DEFAULT_MODE, DICT_GAP_MS
 } = require('./config/gameConfig');
 const {
   announceLetter, announceWord, speakWord, unlockAudio,
+  speakSequence, stopSpeakSequence,
   setGrade, isGradeReady, loadGradeAudio
 } = require('./utils/audio');
 const adapter = require('./platform/adapter');
-const sidebar = require('./platform/sidebar');
 const { buildPath: linkBuildPath } = require('./utils/link');
+const { buildDictParts, wrapIndex } = require('./utils/dictation');
 
 // 英文印刷体（Andika，SIL 出品，OFL 开源可商用），专为初学者识字设计，字母形态清晰规范，
 // 小写 a/g 为课本标准双体结构，最贴近小学英语书写印刷体。用于拼单词页。
@@ -96,7 +98,7 @@ bgGrad.addColorStop(1, '#ffe0b2');
 // ---- 游戏状态 ----
 // state: 'nav' | 'home' | 'playing' | 'gameover' | 'confirmExit'
 //         | 'grade' | 'loading' | 'loadFail' | 'chapter' | 'spellMode'
-//         | 'spell' | 'wordList' | 'match' | 'link'
+//         | 'spell' | 'wordList' | 'match' | 'link' | 'dictation'
 //   nav         —— 模式选择导航页（找字母 / 拼单词 两个模式均可进入）
 //   home        —— 找字母模式主页（由 FIND_LETTER_ENABLED 控制是否开放）
 //   playing     —— 找字母游戏中
@@ -105,9 +107,10 @@ bgGrad.addColorStop(1, '#ffe0b2');
 //   loading     —— 年级发音分包下载中（进度条）
 //   loadFail    —— 分包下载失败（可重试 / 仍要进入，发音回退逐字母拼读）
 //   chapter     —— 拼单词：二级菜单（具体章节 + 全部章节）
-//   spellMode   —— 练习模式选择（听音拼 / 中文转 / 查阅 / 对对碰 / 字母连连）
+//   spellMode   —— 练习模式选择（听音拼 / 中文转 / 查阅 / 对对碰 / 字母连连 / 单词听写）
 //   spell       —— 拼单词：拼写练习（含答对后的弹框）
 //   link        —— 字母连连：字母网格拖动连线找单词（含答对弹框与完成态）
+//   dictation   —— 单词听写：按间隔自动翻词并循环，四种发音模式，可手动上/下一个
 let state = 'nav';
 let best = adapter.getStorageSync('letterdrop_best') || 0;
 let score = 0;
@@ -127,7 +130,6 @@ let startBtn = null;             // 首页“开始游戏”按钮区域
 let restartBtn = null;           // 结束页“再来一局”按钮区域
 let navFindBtn = null;           // 导航页“找字母”菜单区域
 let navSpellBtn = null;          // 导航页“拼单词”菜单区域
-let sidebarBtn = null;           // 导航页侧边栏复访入口（仅抖音端显示）
 let backBtn = null;              // 返回导航页按钮（主页/结束页左上角）
 let exitBtn = null;              // 游戏中左上角“退出”按钮
 let exitConfirmBtn = null;       // 退出确认弹框“确定退出”按钮
@@ -216,6 +218,25 @@ let linkListContentH = 0;          // 释义列表内容总高（含折行）
 let linkListScrollY = 0;           // 释义列表滚动偏移
 let linkListDragging = false;      // 是否正在拖动释义列表（与网格连线互斥）
 let linkListLastY = null;          // 拖动释义列表时的上一个触点 Y
+
+// ---- 单词听写（dictation）相关状态 ----
+// 按玩家选定的间隔自动翻词并循环；中文→英 / 只英文 / 英→中文 / 只中文四种模式只控制「发音内容与顺序」，
+// 屏幕始终给出中文释义作为听写题目，英文默认遮住、点卡片可揭晓。
+let dictWords = [];                // 当前章节词条 [{en, cn}]（含短语）
+let dictIndex = 0;                 // 当前词条下标
+let dictMode = DICT_DEFAULT_MODE;  // 'cn' 中文→英文 | 'en' 只英文 | 'both' 英文→中文 | 'cnOnly' 只中文
+let dictIntervalIdx = DICT_DEFAULT_INTERVAL_IDX;  // DICT_INTERVALS 的下标
+let dictTimerMs = 0;               // 距下一次自动翻词的剩余时间(ms)
+let dictPlaying = true;            // 是否自动翻词（可暂停，手动切换仍可用）
+let dictShowEn = false;            // 是否揭晓英文
+let dictBackBtn = null;
+let dictPrevBtn = null;
+let dictNextBtn = null;
+let dictPlayBtn = null;
+let dictCardRect = null;
+let dictModeBtns = [];             // [{rect, mode}]
+let dictIntervalBtns = [];         // [{rect, idx}]
+let dictChapterName = '';
 
 // ---- 流程控制 ----
 function startGame() {
@@ -675,25 +696,6 @@ function drawNav() {
 
   navSpellBtn = { x: W / 2 - cardW / 2, y: startY + cardH + gap, w: cardW, h: cardH };
   drawMenuCard(navSpellBtn, '拼单词', '按序拼单词', true);
-
-  // 抖音小游戏必接「侧边栏复访」：仅在抖音端绘制可见入口，微信端完全不出现。
-  sidebarBtn = null;
-  if (sidebar.available()) {
-    const bw = Math.min(230, W - 80);
-    const bh = 42;
-    sidebarBtn = { x: W / 2 - bw / 2, y: H - 76, w: bw, h: bh };
-    ctx.save();
-    ctx.fillStyle = 'rgba(255, 255, 255, 0.9)';
-    roundRectPath(ctx, sidebarBtn.x, sidebarBtn.y, sidebarBtn.w, sidebarBtn.h, bh / 2);
-    ctx.fill();
-    ctx.strokeStyle = '#e0a35a';
-    ctx.lineWidth = 1;
-    ctx.stroke();
-    ctx.font = '15px sans-serif';
-    ctx.fillStyle = '#8a5a2b';
-    ctx.fillText('加入侧边栏 · 下次快速进入', W / 2, sidebarBtn.y + bh / 2);
-    ctx.restore();
-  }
 }
 
 // 绘制一张菜单卡片（enabled=false 时置灰并显示“即将到来”标签）
@@ -1121,13 +1123,14 @@ function drawSpellMode() {
     { mode: 'words', title: '全部单词', sub: '浏览本单元所有单词' },
     { mode: 'match', title: '单词对对碰', sub: '点英文卡听发音，英中配对消除' },
     { mode: 'link', title: '字母连连', sub: '拖动字母连成单词' },
+    { mode: 'dict', title: '单词听写', sub: '按节奏听发音，写单词' },
   ];
   const n = modes.length;
-  // 卡片高度自适应：5 张卡时收紧间距与最小高度，保证小屏也能完整放下（不溢出）
+  // 卡片高度自适应：卡数越多越收紧间距与最小高度，保证小屏也能完整放下（不溢出）
   const topY = H * 0.205;
   const bottomPad = 20;
-  const gap = n >= 5 ? 10 : 16;
-  const cardH = Math.max(62, Math.min(96, (H - topY - bottomPad - gap * (n - 1)) / n));
+  const gap = n >= 6 ? 8 : (n >= 5 ? 10 : 16);
+  const cardH = Math.max(56, Math.min(96, (H - topY - bottomPad - gap * (n - 1)) / n));
   const startY = topY;
 
   spellModeCards = [];
@@ -2033,6 +2036,187 @@ function draw() {
   else if (state === 'wordList') drawWordList();
   else if (state === 'match') drawMatch();
   else if (state === 'link') drawLink();
+  else if (state === 'dictation') drawDictation();
+}
+
+// ============ 单词听写（dictation）============
+// 与拼单词的其它练习同级，位于模式选择页第 6 张卡。
+// 屏幕始终给出中文释义作题目，英文默认遮住（点卡片揭晓）；
+// 四种模式只决定「发音内容与顺序」：cn=中文→英文，en=只英文，both=英文→中文，cnOnly=只中文。
+// 到点自动翻下一个词并循环；上一个/下一个/暂停由玩家随时干预，手动操作后重新计时。
+
+function startDictation(chapterId) {
+  const ch = SPELL_CHAPTERS.find((c) => c.id === chapterId);
+  dictChapterName = ch ? ch.name : '';
+  dictWords = getChapterWordsPlain(chapterId);   // 已按英文去重，含短语（听写不要求逐字母拼写）
+  if (!dictWords.length) { state = 'spellMode'; return; }
+  if (!isGradeReady(currentGradeId)) loadGradeAudio(currentGradeId); // 静默补下载音频分包
+  dictIndex = 0;
+  dictTimerMs = DICT_INTERVALS[dictIntervalIdx];
+  dictPlaying = true;
+  dictShowEn = false;
+  state = 'dictation';
+  dictPlayCurrent();  // 在点击手势链内播第一词，满足 iOS 首次发音解锁要求
+}
+
+// 按当前模式构造发音序列并播放
+function dictPlayCurrent() {
+  const w = dictWords[dictIndex];
+  if (!w) return;
+  speakSequence(buildDictParts(dictMode, w.en), DICT_GAP_MS);
+}
+
+// delta=1 下一个、-1 上一个、0 重播当前；到头/到尾循环
+function dictGoto(delta) {
+  const n = dictWords.length;
+  if (!n) return;
+  dictIndex = wrapIndex(dictIndex, delta, n);
+  dictTimerMs = DICT_INTERVALS[dictIntervalIdx];  // 手动切换后重新计时
+  dictShowEn = false;
+  dictPlayCurrent();
+}
+
+// 听写页通用小按钮
+function dictDrawButton(rect, label, active, size) {
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillStyle = active ? '#ff7a18' : 'rgba(255,255,255,0.94)';
+  roundRectPath(ctx, rect.x, rect.y, rect.w, rect.h, 14);
+  ctx.fill();
+  ctx.lineWidth = 2;
+  ctx.strokeStyle = active ? 'rgba(255,255,255,0.72)' : 'rgba(255,122,24,0.45)';
+  roundRectPath(ctx, rect.x, rect.y, rect.w, rect.h, 14);
+  ctx.stroke();
+  ctx.fillStyle = active ? '#ffffff' : '#8a5a2b';
+  ctx.font = 'bold ' + (size || 16) + 'px sans-serif';
+  ctx.fillText(label, rect.x + rect.w / 2, rect.y + rect.h / 2);
+}
+
+function drawDictation() {
+  ctx.fillStyle = bgGrad;
+  ctx.fillRect(0, 0, W, H);
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+
+  dictBackBtn = { x: 14, y: 14, w: 52, h: 40 };
+  drawBackButton(dictBackBtn);
+
+  ctx.fillStyle = '#5a2d00';
+  ctx.font = 'bold ' + Math.min(30, W * 0.08) + 'px sans-serif';
+  ctx.fillText('单词听写', W / 2, Math.round(H * 0.09));
+  ctx.fillStyle = '#8a5a2b';
+  ctx.font = Math.min(16, W * 0.042) + 'px sans-serif';
+  ctx.fillText('听发音，写单词 · 可手动翻词', W / 2, Math.round(H * 0.145));
+  if (dictChapterName) {
+    ctx.font = Math.min(14, W * 0.036) + 'px sans-serif';
+    ctx.fillText(dictChapterName, W / 2, Math.round(H * 0.185));
+  }
+
+  const w = dictWords[dictIndex];
+  ctx.fillStyle = '#8a5a2b';
+  ctx.font = 'bold ' + Math.min(16, W * 0.042) + 'px sans-serif';
+  ctx.fillText('第 ' + (dictIndex + 1) + ' / ' + dictWords.length + ' 个', W / 2, Math.round(H * 0.225));
+
+  // 主卡片：中文释义（题目）+ 可揭晓的英文
+  const padX = 24;
+  const cardW = W - padX * 2;
+  const cardY = Math.round(H * 0.26);
+  const cardH = Math.round(Math.min(H * 0.23, 220));
+  dictCardRect = { x: padX, y: cardY, w: cardW, h: cardH };
+  ctx.fillStyle = '#ffffff';
+  roundRectPath(ctx, padX, cardY, cardW, cardH, 22);
+  ctx.fill();
+  ctx.lineWidth = 2;
+  ctx.strokeStyle = 'rgba(255,122,24,0.35)';
+  roundRectPath(ctx, padX, cardY, cardW, cardH, 22);
+  ctx.stroke();
+
+  if (w) {
+    const cn = w.cn || w.en;
+    let cnSize = Math.min(38, W * 0.095);
+    ctx.font = 'bold ' + cnSize + 'px sans-serif';
+    while (ctx.measureText(cn).width > cardW - 36 && cnSize > 18) {
+      cnSize -= 2;
+      ctx.font = 'bold ' + cnSize + 'px sans-serif';
+    }
+    ctx.fillStyle = '#5a2d00';
+    ctx.fillText(cn, W / 2, cardY + cardH * 0.38);
+
+    if (dictShowEn) {
+      let enSize = Math.min(30, W * 0.075);
+      ctx.font = 'bold ' + enSize + 'px ' + (SPELL_FONT || 'sans-serif');
+      while (ctx.measureText(w.en).width > cardW - 36 && enSize > 14) {
+        enSize -= 2;
+        ctx.font = 'bold ' + enSize + 'px ' + (SPELL_FONT || 'sans-serif');
+      }
+      ctx.fillStyle = '#2e7d32';
+      ctx.fillText(w.en, W / 2, cardY + cardH * 0.70);
+    } else {
+      ctx.fillStyle = '#b08968';
+      ctx.font = Math.min(16, W * 0.042) + 'px sans-serif';
+      ctx.fillText('点一下卡片看英文', W / 2, cardY + cardH * 0.70);
+    }
+  }
+
+  // 倒计时进度条：暂停时清空，提示「不在自动翻页」
+  const barY = cardY + cardH + 12;
+  ctx.fillStyle = 'rgba(255,255,255,0.55)';
+  roundRectPath(ctx, padX, barY, cardW, 7, 4);
+  ctx.fill();
+  const ratio = dictPlaying
+    ? Math.max(0, Math.min(1, dictTimerMs / DICT_INTERVALS[dictIntervalIdx])) : 0;
+  if (ratio > 0) {
+    ctx.fillStyle = '#ff7a18';
+    roundRectPath(ctx, padX, barY, Math.max(6, cardW * ratio), 7, 4);
+    ctx.fill();
+  }
+
+  // 发音模式（4 档）
+  let y = barY + 26;
+  ctx.fillStyle = '#8a5a2b';
+  ctx.font = Math.min(14, W * 0.036) + 'px sans-serif';
+  ctx.fillText('发音模式', W / 2, y);
+  const modeDefs = [
+    { mode: 'cn', label: '中文→英' },
+    { mode: 'en', label: '只英文' },
+    { mode: 'both', label: '英→中文' },
+    { mode: 'cnOnly', label: '只中文' }
+  ];
+  const mGap = 6, mH = 42, mW = (W - 32 - mGap * 3) / 4, mY = y + 12;
+  dictModeBtns = [];
+  modeDefs.forEach((m, i) => {
+    const rect = { x: 16 + i * (mW + mGap), y: mY, w: mW, h: mH };
+    dictModeBtns.push({ rect, mode: m.mode });
+    // 4 个中文标签挤在一行，字号按宽度收敛，避免最窄机型溢出
+    dictDrawButton(rect, m.label, dictMode === m.mode, Math.min(15, W * 0.037));
+  });
+
+  // 时间间隔（5 / 10 / 15 / 30 秒）
+  y = mY + mH + 18;
+  ctx.fillStyle = '#8a5a2b';
+  ctx.font = Math.min(14, W * 0.036) + 'px sans-serif';
+  ctx.fillText('每词间隔', W / 2, y);
+  const iGap = 6, iH = 38, iW = (W - 32 - iGap * 3) / 4, iY = y + 12;
+  dictIntervalBtns = [];
+  DICT_INTERVALS.forEach((ms, i) => {
+    const rect = { x: 16 + i * (iW + iGap), y: iY, w: iW, h: iH };
+    dictIntervalBtns.push({ rect, idx: i });
+    dictDrawButton(rect, (ms / 1000) + '秒', dictIntervalIdx === i, Math.min(16, W * 0.042));
+  });
+
+  // 上一个 / 暂停·继续 / 下一个
+  const cY = iY + iH + 18, cH = 54, cGap = 10, cW = (W - 32 - cGap * 2) / 3;
+  dictPrevBtn = { x: 16, y: cY, w: cW, h: cH };
+  dictPlayBtn = { x: 16 + cW + cGap, y: cY, w: cW, h: cH };
+  dictNextBtn = { x: 16 + (cW + cGap) * 2, y: cY, w: cW, h: cH };
+  dictDrawButton(dictPrevBtn, '上一个', false, 17);
+  dictDrawButton(dictPlayBtn, dictPlaying ? '暂停' : '继续', true, 17);
+  dictDrawButton(dictNextBtn, '下一个', false, 17);
+
+  // 操作提示（按钮文案「中文→英 / 只英文 / 英→中文 / 只中文」已直接表达发音内容，不再重复一行）
+  ctx.fillStyle = '#a98261';
+  ctx.font = Math.min(13, W * 0.034) + 'px sans-serif';
+  ctx.fillText('到点自动下一个并循环 · 手动切换会重新计时', W / 2, cY + cH + 26);
 }
 
 // 小游戏渲染循环：优先用 canvas.requestAnimationFrame（Canvas 2D 节点方法，官方推荐）
@@ -2058,6 +2242,11 @@ function loop() {
   if (scoreBumpTimer > 0) scoreBumpTimer -= dt;
   if (matchMsgTimer > 0) matchMsgTimer -= dt;
   if (linkMsgTimer > 0) linkMsgTimer -= dt;
+  // 单词听写：到点自动翻下一个词并循环；暂停或手动切换后重新计时
+  if (state === 'dictation' && dictPlaying && dictWords.length) {
+    dictTimerMs -= dt;
+    if (dictTimerMs <= 0) dictGoto(1);
+  }
   if (state === 'match') {
     let allGone = true;
     for (const b of matchBlocks) {
@@ -2110,7 +2299,6 @@ adapter.onTouchStart((e) => {
       return;
     }
     if (hit(navSpellBtn, px, py)) { state = 'grade'; gradeScrollY = 0; return; }
-    if (hit(sidebarBtn, px, py)) { sidebar.navigate(); return; }
   } else if (state === 'grade') {
     if (hit(backBtn, px, py)) { state = 'nav'; return; }
     // 册数较多时列表可滚动：按下先记录命中卡片，抬手且未判定为滑动才真正进入，
@@ -2147,6 +2335,7 @@ adapter.onTouchStart((e) => {
         if (item.mode === 'words') enterWordList(spellChapterId);
         else if (item.mode === 'match') startMatch(spellChapterId);
         else if (item.mode === 'link') startLink(spellChapterId);
+        else if (item.mode === 'dict') startDictation(spellChapterId);
         else startSpellChapter(spellChapterId, item.mode);
         return;
       }
@@ -2185,6 +2374,33 @@ adapter.onTouchStart((e) => {
       linkPath = [idx];
       linkLastPoint = { x: px, y: py };
     }
+  } else if (state === 'dictation') {
+    if (hit(dictBackBtn, px, py)) { stopSpeakSequence(); state = 'spellMode'; return; }
+    if (hit(dictPrevBtn, px, py)) { dictGoto(-1); return; }
+    if (hit(dictNextBtn, px, py)) { dictGoto(1); return; }
+    if (hit(dictPlayBtn, px, py)) {
+      dictPlaying = !dictPlaying;
+      if (dictPlaying) {
+        dictTimerMs = DICT_INTERVALS[dictIntervalIdx];
+        dictPlayCurrent();
+      } else {
+        stopSpeakSequence();
+      }
+      return;
+    }
+    for (const b of dictModeBtns) {
+      if (hit(b.rect, px, py)) { dictMode = b.mode; dictGoto(0); return; }
+    }
+    for (const b of dictIntervalBtns) {
+      // 只调整节奏，不打断正在念的片段
+      if (hit(b.rect, px, py)) {
+        dictIntervalIdx = b.idx;
+        dictTimerMs = DICT_INTERVALS[b.idx];
+        return;
+      }
+    }
+    if (hit(dictCardRect, px, py)) { dictShowEn = !dictShowEn; return; }
+    return;
   } else if (state === 'wordList') {
     if (hit(wordListBackBtn, px, py)) { state = 'spellMode'; return; }
     for (const sp of wordListSpeakers) {
@@ -2327,6 +2543,74 @@ adapter.onTouchEnd(() => {
   gradePendingCard = null;
   lastTouchY = null;
 });
+
+// ============ 转发分享 ============
+// 微信小游戏的「转发给朋友 / 分享到朋友圈」菜单默认置灰、不可点击，必须由游戏代码
+// 主动调用 showShareMenu 打开；否则即使正式版+已认证，右上角这两个图标仍是灰的。
+// 认证/发布只给「使用资格」，开关本身要代码来开。全部经 adapter 收口，不直接碰 wx。
+const SHARE_TITLE = '字母拼拼 · 听音辨形，边玩边学英语字母和单词';
+const SHARE_QUERY = 'from=share';
+let shareImagePath = '';  // 5:4 转发图临时路径；生成失败则留空，回退微信默认 logo
+
+// 用离屏 Canvas 现画一张 5:4 转发卡片图，导出为临时文件路径。
+// 不指定 imageUrl 时微信会用后台配置的小游戏 logo，故生成失败不影响分享可用性。
+function buildShareImage() {
+  if (typeof adapter.createCanvas !== 'function') return;
+  try {
+    const sc = adapter.createCanvas();           // 第二次调用返回离屏画布
+    const sw = 500, sh = 400;                    // 官方推荐 5:4
+    sc.width = sw;
+    sc.height = sh;
+    const c = sc.getContext('2d');
+    const g = c.createLinearGradient(0, 0, 0, sh);
+    g.addColorStop(0, '#fff3e0');
+    g.addColorStop(1, '#ffd28a');
+    c.fillStyle = g;
+    c.fillRect(0, 0, sw, sh);
+    c.textAlign = 'center';
+    c.textBaseline = 'middle';
+    c.fillStyle = '#5a2d00';
+    c.font = 'bold 76px sans-serif';
+    c.fillText('字母拼拼', sw / 2, sh / 2 - 46);
+    c.fillStyle = '#8a5a2b';
+    c.font = '34px sans-serif';
+    c.fillText('听音辨形 · 拼词启蒙', sw / 2, sh / 2 + 38);
+    c.font = '26px sans-serif';
+    c.fillStyle = '#a8703a';
+    c.fillText('点开一起学英语', sw / 2, sh / 2 + 96);
+    if (typeof sc.toTempFilePathSync === 'function') {
+      shareImagePath = sc.toTempFilePathSync({
+        x: 0, y: 0, width: sw, height: sh, destWidth: sw, destHeight: sh
+      }) || '';
+    }
+  } catch (e) {
+    shareImagePath = '';  // 任何异常都回退默认 logo，不影响分享
+  }
+}
+
+// 组装自定义转发卡片；图片仅在成功生成时带上。
+function shareCard() {
+  const card = { title: SHARE_TITLE, query: SHARE_QUERY };
+  if (shareImagePath) card.imageUrl = shareImagePath;
+  return card;
+}
+
+// 初始化分享能力：打开右上角菜单、设置被动/朋友圈卡片、预生成转发图。
+function initShare() {
+  if (typeof adapter.showShareMenu === 'function') {
+    try { adapter.showShareMenu({ menus: ['shareAppMessage', 'shareTimeline'] }); } catch (e) {}
+  }
+  if (typeof adapter.onShareAppMessage === 'function') {
+    try { adapter.onShareAppMessage(shareCard); } catch (e) {}
+  }
+  if (typeof adapter.onShareTimeline === 'function') {
+    // 朋友圈为 beta、仅 Android；不指定 imageUrl 时用默认 logo，标题用同一句
+    try { adapter.onShareTimeline(() => ({ title: SHARE_TITLE, query: SHARE_QUERY })); } catch (e) {}
+  }
+  buildShareImage();
+}
+
+initShare();
 
 // 启动渲染循环
 raf(loop);

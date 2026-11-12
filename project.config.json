@@ -35,16 +35,20 @@
         "type": "folder"
       },
       {
-        "value": "platform/tt",
-        "type": "folder"
-      },
-      {
         "value": ".gitignore",
         "type": "file"
       },
       {
         "value": "project.private.config.json",
         "type": "file"
+      },
+      {
+        "value": "docs",
+        "type": "folder"
+      },
+      {
+        "value": ".git",
+        "type": "folder"
       }
     ],
     "include": []

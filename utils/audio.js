@@ -9,7 +9,8 @@
 // game.js 调用 loadGradeAudio() 触发平台分包加载，成功后才能播放该册音频。
 
 const { WORD_AUDIO } = require('../data/word_audio');
-const { slug, packageRoot } = require('../data/book_index');
+const { CN_AUDIO } = require('../data/cn_audio');
+const { slug, packageRoot, cnPackageRoot } = require('../data/book_index');
 const adapter = require('../platform/adapter');
 
 const ctxMap = {};
@@ -19,10 +20,9 @@ let activeWordCtx = null;
 // 逐字母拼读回退链的代号：新的一次点读会让旧链自行终止
 let fallbackGen = 0;
 
-// 统一创建音频上下文：按平台优先顺序设置包内路径，加载失败时自动换下一种写法重试。
-// 微信端优先 '/assets/...'（历史行为不变）；抖音端优先 'assets/...'（官方教程写法，
-// PC 模拟器下前导斜杠会被当成站点根 URL 而 404）。全部候选失败才回调 onFinalError。
-// 每次失败都会打印实际尝试的路径，便于在开发者工具 Console 里定位。
+// 统一创建音频上下文：优先 '/assets/...'（历史行为不变），加载失败时自动换
+// 不带前导斜杠的相对路径重试（部分环境如 PC 模拟器会把前导斜杠当成站点根 URL 而 404）。
+// 全部候选失败才回调 onFinalError。每次失败都会打印实际尝试的路径，便于在开发者工具 Console 里定位。
 function createCtx(pkgPath, onFinalError) {
   const c = adapter.createInnerAudioContext();
   const candidates = adapter.audioSrcCandidates
@@ -96,7 +96,8 @@ function announceLetter(letter, gapMs) {
 
 // 逐字母拼读回退：跳过空格/连字符，只念字母名（短语也能有声音反馈）。
 // 用于分包尚未加载、或个别词条没有预生成发音时，保证任何单词都能出声。
-function announceWord(word, gapMs) {
+// 可选 onDone 供「听写」的发音序列知道英文这一片段何时结束，再接下一段。
+function announceWord(word, gapMs, onDone) {
   // 新的一次点读先终止上一条尚未播完的拼读链，避免连点时字母音叠加
   const gen = ++fallbackGen;
   if (activeWordCtx) {
@@ -107,7 +108,8 @@ function announceWord(word, gapMs) {
   const gap = typeof gapMs === 'number' ? gapMs : 260;
   let i = 0;
   const playNext = () => {
-    if (gen !== fallbackGen || i >= letters.length) return;
+    if (gen !== fallbackGen) return;
+    if (i >= letters.length) { if (typeof onDone === 'function') onDone(); return; }
     const up = letters[i].toUpperCase();
     i += 1;
     try {
@@ -186,12 +188,99 @@ function loadGradeAudio(g, onProgress, onSuccess, onFail) {
   }
 }
 
+// ---- 发音序列（听写模式）----
+// 支持「中文释义 → 英文单词」「只英文」「英文单词 → 中文释义」「只中文释义」四种顺序。
+// 每个片段用独立 InnerAudioContext（不入 wordCtxMap 缓存），播完即销毁；
+// 用代号 seqGen 打断旧序列，手动切词 / 切模式 / 切间隔时上一条会立刻停住，不会叠音。
+let seqGen = 0;
+let seqTimer = null;
+// 当前正在播放的「序列片段」上下文（与 speakWord 的缓存 ctx 分开管理，互不误伤）
+let seqCtx = null;
+
+function stopSpeakSequence() {
+  seqGen += 1;                       // 让所有在途片段的回调因代号失配而自行作废
+  fallbackGen += 1;                 // 同时掐掉英文片段可能正在回退的逐字母拼读链，避免叠音
+  if (seqTimer) { clearTimeout(seqTimer); seqTimer = null; }
+  if (seqCtx) {
+    try { seqCtx.stop(); } catch (e) {}
+    try { seqCtx.destroy(); } catch (e) {}
+    seqCtx = null;
+  }
+}
+
+// 内部：单片段播放。onEnded(ok) 只回调一次；失败时可按调用方选择是否回退拼读。
+function playPart(src, onEnded, onFail) {
+  let settled = false;
+  const finish = (ok) => { if (!settled) { settled = true; onEnded(ok); } };
+  try {
+    const c = createCtx(src, (res, ctx) => {
+      try { ctx.destroy(); } catch (e) {}
+      if (seqCtx === ctx) seqCtx = null;
+      if (onFail) onFail(); else finish(false);
+    });
+    // 刚切页 / 文件未缓存时首次 play 偶尔被静默丢弃，用 onCanplay 补一次
+    let started = false;
+    c.onPlay(() => { started = true; });
+    c.onCanplay(() => { if (!started) c.play(); });
+    c.onEnded(() => {
+      try { c.destroy(); } catch (e) {}
+      if (seqCtx === c) seqCtx = null;
+      finish(true);
+    });
+    seqCtx = c;
+    c.play();
+  } catch (e) {
+    if (onFail) onFail(); else finish(false);
+  }
+}
+
+// 英文片段：分包未就绪 / 清单未覆盖 / 播放失败时回退为逐字母拼读，保证仍有声音
+function playEnPart(en, onEnded) {
+  const f = slug(en);
+  const list = (WORD_AUDIO && WORD_AUDIO[currentGrade]) || [];
+  if (list.indexOf(f) < 0 || !readyMap[currentGrade]) {
+    announceWord(en, 260, () => onEnded(true));
+    return;
+  }
+  playPart(packageRoot(currentGrade) + f + '.mp3', onEnded,
+    () => announceWord(en, 260, () => onEnded(true)));
+}
+
+// 中文片段：中文音频未就绪时直接跳过（不逐字拼读中文），由序列立即接下一段
+function playCnPart(en, onEnded) {
+  const f = slug(en);
+  const list = (CN_AUDIO && CN_AUDIO[currentGrade]) || [];
+  if (list.indexOf(f) < 0 || !readyMap[currentGrade]) { onEnded(false); return; }
+  playPart(cnPackageRoot(currentGrade) + f + '.mp3', onEnded);
+}
+
+// parts: [{type:'cn'|'en', en:'词条英文'}]；gapMs: 片段之间的停顿
+function speakSequence(parts, gapMs) {
+  stopSpeakSequence();
+  const gen = seqGen;
+  const gap = typeof gapMs === 'number' ? gapMs : 650;
+  let i = 0;
+  const next = () => {
+    if (gen !== seqGen || i >= parts.length) return;
+    const part = parts[i++];
+    const after = (ok) => {
+      if (gen !== seqGen) return;
+      seqTimer = setTimeout(next, ok ? gap : 0); // 被跳过的片段（如中文未就绪）不占位
+    };
+    if (part.type === 'cn') playCnPart(part.en, after);
+    else playEnPart(part.en, after);
+  };
+  next();
+}
+
 // 单词真实发音上下文缓存：按「年级 + 词条」复用，反复调用时先 stop 再 play。
 const wordCtxMap = {};
 
 // 播放单词真实发音：优先播分包内 edge-tts 预生成的 mp3；
 // 分包未加载 / 清单未覆盖 / 播放失败时回退为逐字母拼读。
 function speakWord(word) {
+  // 普通点读与听写序列互斥：离开听写页去点读单词时，先停掉可能还在念的序列
+  stopSpeakSequence();
   const f = slug(word);
   const list = (WORD_AUDIO && WORD_AUDIO[currentGrade]) || [];
   if (list.indexOf(f) < 0 || !readyMap[currentGrade]) {
@@ -245,5 +334,6 @@ function unlockAudio() {
 
 module.exports = {
   speakLetter, announceLetter, announceWord, speakWord, unlockAudio,
+  speakSequence, stopSpeakSequence,
   setGrade, getGrade, isGradeReady, loadGradeAudio
 };

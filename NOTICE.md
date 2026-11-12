@@ -12,13 +12,13 @@
 - 开源许可：Apache License, Version 2.0（全文见同目录 `LICENSE`）
 - 源码仓库（public）：<https://github.com/zhangyongpo/letterdrop-wx>
 - 本游戏为独立开发，使用微信小游戏原生 Canvas 2D + CommonJS 编写，**未使用任何第三方游戏引擎、SDK、公共库、商业源码或外包代码**；无 npm 依赖、无运行时网络请求。
-- 上传的 JS 均为带中文注释的可读源码，未加密、未混淆；核心逻辑集中在 `game.js`（状态机 / 渲染 / 触摸分发），平台差异收敛在 `platform/adapter.js`。
+- 上传的 JS 均为带中文注释的可读源码，未加密、未混淆；核心逻辑集中在 `game.js`（状态机 / 渲染 / 触摸分发），微信小游戏平台 API 收口在 `platform/adapter.js`。
 
 ## 2. 代码中与其他小游戏可能相似的部分（说明）
 
 | 部分                                                                    | 性质                                               |
 | --------------------------------------------------------------------- | ------------------------------------------------ |
-| `platform/adapter.js`、`platform/sidebar.js`                           | 对 `wx` / `tt` 平台 API 的统一封装，属平台接口的有限表达，不含本游戏业务逻辑  |
+| `platform/adapter.js`                                                  | 对微信小游戏 `wx` 平台 API 的统一收口，属平台接口的有限表达，不含本游戏业务逻辑  |
 | `game.js` 中 canvas 初始化、`requestAnimationFrame` 主循环、触摸命中判断、数组洗牌、圆角矩形绘制 | 小游戏开发的通用惯用写法                                     |
 | `data/words*.js`、`data/book_index.js`                                 | 教材词汇表（公开资料整理的事实性数据）与册次索引，非程序逻辑                   |
 | `data/word_audio.js`                                                  | 由 `tools/gen_words_audio.py` 自动生成的音频文件名清单，属事实性数据 |

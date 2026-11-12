@@ -1,25 +1,27 @@
-# 字母拼拼 · 微信 / 抖音双端小游戏（letterdrop-wx）
+# 字母拼拼 · 微信小游戏（letterdrop-wx）
 
-一款面向幼儿英语启蒙的**原生小游戏**（Canvas 2D，无 DOM / 无 WXML）。同一份源码构建出微信小游戏与抖音小游戏两个产物。两种玩法：
+一款面向幼儿英语启蒙的**原生小游戏**（Canvas 2D，无 DOM / 无 WXML），在微信小游戏平台运行。两种玩法：
 
 - **找字母**：App 播报一个字母，6 个字母分两排从顶部掉落，落地前点中对应字母（听音辨形，带计分/闯关）。导航页卡片已恢复为可点击（橙色高亮 + 副标题「听音找字母」），玩法代码完整保留。
-- **拼单词（当前主玩法）**：六册教材词库 + 五种练习（听音拼单词 / 中文转单词 / 全部单词查阅 / 单词对对碰 / 字母连连），含单词级真实发音。
+- **拼单词（当前主玩法）**：六册教材词库 + 六种练习（听音拼单词 / 中文转单词 / 全部单词查阅 / 单词对对碰 / 字母连连 / 单词听写），含单词级真实发音（英文 + 中文释义两套）。
 
 > 完全离线：所有发音为包内 mp3，运行时不联网、无后端、无插件。
-> 单仓库：游戏逻辑、词库、944 个发音 mp3 都只有一份，平台差异收敛在 `platform/`；`dist/` 产物不入库。
+> 单仓库：游戏逻辑、词库、944 个英文发音 + 944 个中文释义发音 mp3 都只有一份；`dist/` 产物不入库。
 
 ## 教材与词库
 
 统一使用 **2024 国家教材委员会审核通过 · 外语教学与研究出版社 · 外研剑桥《Join In》（三年级起点，刘兆义主编）**，与纸质课本封面左上角的绿色「2024」审定标志一致。注意外研社同时有「新标准三起」「新交际」等其它系列，单元名相近但词表完全不同，扩充词库时勿混用。
 
-| 册次 | 教材版次 | 章节 | 词条 | 发音 mp3 | 分包 |
-|---|---|---|---|---|---|
-| 三年级上册 | 2024 秋 | Welcome + Unit 1~6 | 210 | 198 | `g3` |
-| 三年级下册 | 2025 春 | Unit 1~6 | 199 | 199 | `g3b` |
-| 四年级上册 | 2025 秋 | Unit 1~6 + Plays | 188 | 188 | `g4` |
-| 四年级下册 | 2026 春 | Unit 1~6 | 98 | 98 | `g4b` |
-| 五年级上册 | 2026 秋 | Unit 1~6 + Plays | 136 | 136 | `g5` |
-| 六年级上册 | 2026 秋 | Unit 1~6 | 126 | 125 | `g6` |
+| 册次 | 教材版次 | 章节 | 词条 | 英文发音 mp3 | 中文发音 mp3 | 分包 |
+|---|---|---|---|---|---|---|
+| 三年级上册 | 2024 秋 | Welcome + Unit 1~6 | 210 | 198 | 198 | `g3` |
+| 三年级下册 | 2025 春 | Unit 1~6 | 199 | 199 | 199 | `g3b` |
+| 四年级上册 | 2025 秋 | Unit 1~6 + Plays | 188 | 188 | 188 | `g4` |
+| 四年级下册 | 2026 春 | Unit 1~6 | 98 | 98 | 98 | `g4b` |
+| 五年级上册 | 2026 秋 | Unit 1~6 + Plays | 136 | 136 | 136 | `g5` |
+| 六年级上册 | 2026 秋 | Unit 1~6 | 126 | 125 | 125 | `g6` |
+
+两套发音都按「英文 slug」命名、一一对应：英文在 `audio/words/`，中文释义在 `audio/cn/`，各年级分包内。中文用于「单词听写」的中文→英、英→中文、只中文三种模式（以及中文转单词练习）。
 
 词表整理自课本 Words and expressions 页的公开资料（OCR），**接入前建议对照纸质课本词汇表页核对**，已知待核点：六上 Unit 4、四下 Unit 6 收录词数明显偏少，疑似源资料抓取不全；三下个别单元标题在 OCR 资料中与课本目录略有出入（已按电子课本目录统一）。
 
@@ -31,7 +33,7 @@
 
 ## 玩法规则
 
-> **找字母已恢复开放**：`config/gameConfig.js` 的 `FIND_LETTER_ENABLED` 现为 `true`（两端共用，重建产物后生效），导航页卡片可点击进入 `home`。如需再次下线，把该值改回 `false` 即可；`home / playing / gameover / confirmExit` 状态与逻辑始终保留。
+> **找字母已恢复开放**：`config/gameConfig.js` 的 `FIND_LETTER_ENABLED` 现为 `true`（改完源码、开发者工具重新编译即生效，无需构建），导航页卡片可点击进入 `home`。如需再次下线，把该值改回 `false` 即可；`home / playing / gameover / confirmExit` 状态与逻辑始终保留。
 
 **找字母**：每组 6 个字母（3 列 × 2 排）；正确答案最多 2 个（大小写合计）；点中 +1 分、点错倒扣（不低于 0）、目标落地漏点扣 1 命；3 命结束结算；每 10 组速度 +1 档；最高分存本地存储 `letterdrop_best`；游戏中退出有二次确认。
 
@@ -44,50 +46,51 @@
   - **只有中文列表这一块可以上下滑动**（网格区拖动仍是连线，两者按落点互斥）；仅在可视区确实放不下时才出现浅底与细滚动条，把剩余中文滑出来。布局优先给列表留足空间，常见机型 3 行可一次性显示、无需滑动。
   - **字母版本切换**：右上角 `Aa 大写版 / aa 小写版` 按钮，切换后网格里 48 个字母（含干扰字母）整体显示为大写或小写，连对弹框里的单词同步跟随；`linkGrid` 内部恒存大写、判定统一转小写比较，切换不影响本局进度与发音。默认版本由 `LINK_DEFAULT_LOWERCASE` 控制（默认 `false` = 大写版），玩家切换后在本次游戏会话内保持。**底部中文提示始终是中文**，连对后也只加一个勾，不替换成英文单词。
   - 纯算法在 `utils/link.js`（支持任意 行×列 矩形网格），`node tools/check_link.js` 可对 500 局做路径合法性自检；拖动按 8px 插值补格，快速划过不会断线。分包未就绪时同样后台补下载。
+- **单词听写**：与对对碰同级的第 6 张模式卡，按当前章节词表（去重、含短语）顺序听写。
+  - **四种发音模式**（只决定发音内容与顺序，屏幕始终显示中文释义作题目）：`中文→英` = 先读中文释义再读英文单词；`只英文` = 只念英文（看中文想拼写，最贴近课堂听写）；`英→中文` = 先念英文再读释义（先听后对答案）；`只中文` = 只念中文释义、不读英文（屏幕已给出中文，仅作听音巩固）。模式按钮 4 等分，字号按屏宽收敛避免窄机型溢出。片段间隔 `DICT_GAP_MS=650`，由 `utils/audio.js` 的 `speakSequence()` 串行播放，切词/切模式会打断旧序列、不叠音。
+  - **时间间隔**可选 **5 / 10 / 15 / 30 秒**（`DICT_INTERVALS`），到点自动切下一个词并**循环**；页面有**上一个 / 暂停·继续 / 下一个**按钮，手动切换后立即重新计时。暂停 = 停掉在途发音 + 停止自动计时、进度条清空；暂停期间手动点上一个/下一个仍会念当前词（主动点读），点「继续」则重播当前词并恢复自动翻页。
+  - 英文默认遮住，点卡片揭晓/再藏起；中文发音未就绪（分包未下载或清单缺条）时自动只播英文，不影响练习。序列纯逻辑在 `utils/dictation.js`，`node tools/check_dictation.js` 自检发音顺序、循环边界、间隔档位与两套清单一一对齐。
 
 含空格的短语（如 `on top of the world`）、连字符词（如 `forty-five`）和撇号词（如 `two o'clock`）有真实发音、可在查阅页播放，但不进入逐字母拼写练习。拼写页用 `assets/fonts/andika.ttf`（SIL 开源印刷体）绘制英语四线三格。
 
-## 双端构建
+## 构建（发布前可选）
 
-**源码只有一份，不按平台复制整套代码。** 微信端可继续直接用仓库根目录开发调试；抖音端由构建脚本产出。
+**微信单端日常无需构建。** 原生小游戏没有编译环节，`game.js` 就是运行时代码——用微信开发者工具**直接导入仓库根目录**即可开发、调试、预览、真机调试与上传，改完点「编译」即生效。根目录的打包排除由 `project.config.json` 的 `packOptions.ignore` 保证（已排除 `tools/` / `scripts/` / `docs/` / `.git/` / `dist/` / 说明文档 / legacy 词表 / 图标等），不会把开发文件与软著材料打进代码包。
+
+`node scripts/build.js` 只是**发布前可选**的质检 / 打包工具，产出一份按白名单组装的干净快照 `dist/wx/`（另一种可导入上传的入口）。它做的三件事，都不是每次改代码的必需步骤：
 
 ```bash
-node scripts/build.js                  # 构建两端 -> dist/wx/ 与 dist/tt/
-node scripts/build.js --platform wx    # 只构建微信端
-node scripts/build.js --platform tt    # 只构建抖音端
+node scripts/build.js                  # 可选：产出干净快照 -> dist/wx/
 ```
 
-构建脚本做的事：拷贝共享源码（含六个音频分包）→ 写入对应平台的 `game.json` / `project.config.json` → 校验分包字段与目录存在 → 扫描产物里是否有人绕过适配层直接调用平台 API → 打印主包 / 分包 / 总包体积并对照上限。
+1. **干净快照**：按白名单把共享源码（含六个音频分包）拷进 `dist/wx/`，天然不含 `docs/` / `tools/` / `.git/` 等无关目录；配置取根目录的 `game.json` / `project.config.json`（重新序列化写入）。
+2. **静态护栏**：扫描产物里是否有人绕过 `platform/adapter.js` 直接调用 `wx.*`。
+3. **体积自检**：校验分包字段与目录存在，打印主包 / 分包 / 总包体积并对照上限。
 
-| 项 | 微信端 | 抖音端 |
-|---|---|---|
-| 配置文件来源 | 仓库根目录 | `platform/tt/` |
-| 分包字段 | `subpackages`（小写 p） | `subPackages`（**驼峰 P**，官方明确要求） |
-| 主包 / 总包上限 | 4 M / 30 M | 4 M / 20 M |
-| 当前产物 | 主包 1.00 MiB、总包 13.18 MiB | 主包 1.00 MiB、总包 13.18 MiB |
-| 侧边栏复访 | 不需要，入口自动隐藏 | 必接，导航页底部「加入侧边栏」按钮 |
-| AppID | 根目录 `project.config.json`：`wx4de65122514bb5e0` | `platform/tt/project.config.json`：`tt23d95564bda660c602` |
+> **两种入口择一即可**：直接上传仓库根目录（推荐，改完即传、无需构建）；或每次改完源码重跑一次 `node scripts/build.js` 后用 `dist/wx/` 上传（否则产物会落后于源码）。不必两边来回同步。
 
-`game.js` 与 `utils/audio.js` 只依赖 `platform/adapter.js`。适配层把两端 API 统一为 `adapter.*`（微信 → `wx`，抖音 → `tt`），并在抖音端补齐：`getWindowInfo` 回退到 `getSystemInfoSync`、`loadFont` 自动补包根绝对路径、缺失 `setInnerAudioOption` 时跳过全局设置（每个音频实例仍单独设 `obeyMuteSwitch=false`）。**新增平台 API 必须同步加进 `adapter.js` 的 `API_LIST`**，否则构建时的静态检查会拦截。
+| 项 | 值 |
+|---|---|
+| 配置文件来源 | 仓库根目录 `game.json` / `project.config.json` |
+| 分包字段 | `subpackages`（小写 p） |
+| 主包 / 总包上限 | 4 M / 30 M |
+| 当前产物 | 主包约 1.03 MiB、总包约 17.01 MiB |
+| AppID | `wx4de65122514bb5e0` |
 
-`platform/sidebar.js` 提供抖音必接的侧边栏复访能力，包内含 `tt.navigateToScene` 调用；微信端 `available()` 恒为 `false`，不绘制也不调用。
+`game.js` 与 `utils/audio.js` 只依赖 `platform/adapter.js`。适配层把微信小游戏 API 统一收口为 `adapter.*`，**新增平台 API 必须同步加进 `adapter.js` 的 `API_LIST`**，否则跑 `build.js` 时静态护栏会拦截（该检查可选，但建议上传前跑一次）。
 
-**音频路径（两端唯一实质差异）**：抖音小游戏官方教程里包内音效写的是 `audio/click.mp3`（相对路径、无前导斜杠），而 PC 模拟器是 Web 环境，会把 `/assets/audio/A.mp3` 当成站点根 URL 请求而 404，表现就是 `NotSupportedError: Failed to load because no supported source was found.`、全程无声。`adapter.audioSrcCandidates()` 按平台给出候选顺序（微信 `/assets/... → assets/...`，抖音 `assets/... → ./assets/... → /assets/...`），`utils/audio.js` 的 `createCtx()` 在 `onError` 时自动换下一种写法重试，全部失败才回退逐字母拼读。每次失败都会把实际尝试的路径打到 Console，方便定位。微信端首选路径未变，行为零变化。
+**音频路径回退**：微信端优先 `/assets/...` 绝对路径（历史行为不变）；部分环境（如 PC 模拟器的 Web 容器）会把前导斜杠当成站点根 URL 请求而 404，表现为 `NotSupportedError: Failed to load because no supported source was found.`、全程无声。`adapter.audioSrcCandidates()` 给出候选顺序（`/assets/... → assets/...`），`utils/audio.js` 的 `createCtx()` 在 `onError` 时自动换下一种写法重试，全部失败才回退逐字母拼读。每次失败都会把实际尝试的路径打到 Console，方便定位。
 
 ## 目录结构
 
 ```
 letterdrop-wx/
-├── game.js                 ★ 入口：状态机 / 渲染 / 动画 / 触摸分发（双端共享）
-├── game.json               微信端运行配置 + 六个册次音频分包声明
-├── project.config.json     微信端工程配置（compileType: game）
+├── game.js                 ★ 入口：状态机 / 渲染 / 动画 / 触摸分发
+├── game.json               运行配置 + 六个册次音频分包声明
+├── project.config.json     工程配置（compileType: game）
 ├── platform/
-│   ├── adapter.js          ★ 平台适配层：wx / tt 统一为 adapter.*
-│   ├── sidebar.js          抖音侧边栏复访能力（微信端自动隐藏）
-│   └── tt/
-│       ├── game.json       抖音端配置（subPackages 驼峰）
-│       └── project.config.json  抖音端工程配置（appid: tt23d95564bda660c602）
-├── scripts/build.js        ★ 双端构建脚本 + 静态护栏 + 体积检查
+│   └── adapter.js          ★ 微信小游戏平台 API 收口层：wx 统一为 adapter.*
+├── scripts/build.js        发布前可选的构建脚本：干净快照 + 静态护栏 + 体积检查
 ├── assets/
 │   ├── audio/A…Z.mp3       26 个字母发音（主包，找字母首启必需）
 │   └── fonts/andika.ttf    拼写页印刷体
@@ -97,54 +100,79 @@ letterdrop-wx/
 │   ├── words_b34.js        三下 / 四下词库（2024 审定新版）
 │   ├── words_g456.js       四/五/六上词库
 │   ├── words_b56_legacy.js 五下 / 六下旧版词表（未接入，已排除打包）
-│   ├── book_index.js       ★ 六册总索引、册次列表、slug 规则、分包路径
-│   └── word_audio.js       自动生成：按册次记录已生成发音的文件名
-├── utils/audio.js          ★ 字母/单词发音、分包加载状态、iOS 手势解锁、失败回退
+│   ├── book_index.js       ★ 六册总索引、册次列表、slug 规则、分包路径（含中文音频路径）
+│   ├── word_audio.js       自动生成：按册次记录英文发音的文件名
+│   └── cn_audio.js         自动生成：按册次记录中文释义发音的文件名
+├── utils/audio.js          ★ 字母/中英文发音、发音序列（听写）、分包加载、iOS 解锁、失败回退
 ├── utils/link.js           字母连连纯算法：网格路径生成与合法性校验（无平台 API）
-├── subpackages/            ★ 六个分包，各含 game.js 占位入口 + audio/words/*.mp3
+├── utils/dictation.js      单词听写纯算法：四种发音模式、循环翻词下标（无平台 API）
+├── subpackages/            ★ 六个分包，各含 game.js 占位 + audio/words/*.mp3 + audio/cn/*.mp3
 │   ├── g3/ g3b/ g4/ g4b/ g5/ g6/
 ├── tools/
-│   ├── dump_audio_words.js 供 Python 读取全部册次词表（输出 JSON）
-│   ├── gen_words_audio.py  批量生成发音 mp3 + 重建清单
-│   └── check_link.js       字母连连路径算法自检（Node 下运行，不进代码包）
-└── dist/                   构建产物（wx/、tt/），已加入 .gitignore
+│   ├── dump_audio_words.js  供 Python 读取全部册次英文词条（输出 JSON）
+│   ├── gen_words_audio.py   批量生成英文发音 mp3 + 重建清单
+│   ├── dump_cn_audio_words.js  供 Python 读取中文释义 TTS 文本（含朗读清洗）
+│   ├── gen_cn_audio.py      批量生成中文释义 mp3 + 重建清单（48kbps + 裁静音）
+│   ├── check_link.js        字母连连路径算法自检（Node 下运行，不进代码包）
+│   └── check_dictation.js   单词听写顺序/循环/清单对齐自检（不进代码包）
+└── dist/                   可选的构建产物（wx/），日常无需，已加入 .gitignore
 ```
 
 > `project.private.config.json` 目前仍被 Git 跟踪，`.gitignore` 对已跟踪文件不生效。若要将其转为本地文件，执行一次 `git rm --cached project.private.config.json` 再提交即可（本地文件不会删除）。
 
 ## 分包与包体
 
-主包只保留启动必需内容，六册发音各放一个分包（微信用 `subpackages`，抖音用 `subPackages`）。点册次卡片时调用平台的分包加载 API，显示进度条；下载由客户端本地缓存，之后进入无需再等；失败可重试或「仍要进入」（发音自动回退为逐字母拼读，不阻塞玩法）。分包内容仍受内容合规约束。
-
-抖音小游戏加载分包时会自动把 `root` 目录下的 `game.js` 作为入口执行，现有占位入口是纯注释，两端都安全。
+主包只保留启动必需内容，六册发音各放一个分包（`subpackages`）。点册次卡片时调用 `loadSubpackage`，显示进度条；下载由客户端本地缓存，之后进入无需再等；失败可重试或「仍要进入」（发音自动回退为逐字母拼读，不阻塞玩法）。分包内容仍受内容合规约束。
 
 音频格式统一为 **MPEG-1 Layer3 / 44100Hz / 单声道 / 64kbps**——低采样率 MPEG-2 mp3 在 iOS 上会拒播，不要改采样率。
 
-| 项 | 当前体积 | 微信上限 | 抖音上限 |
-|---|---|---|---|
-| 主包 | 1.00 MiB | 4 M | 4 M |
-| 六个分包合计 | 12.18 MiB（944 个 mp3） | 单个不限 | 单分包 ≤20 M |
-| 总包 | 13.18 MiB | 30 M（部分情形按 20 M 计） | 20 M |
+| 项 | 当前体积 | 微信上限 |
+|---|---|---|
+| 主包 | 1.03 MiB | 4 M |
+| 六个分包合计 | 15.98 MiB（944 英文 + 944 中文 = 1888 个 mp3） | 单个不限 |
+| 总包 | 17.01 MiB | 30 M（部分情形按 20 M 计） |
+
+> 中文释义发音是「单词听写」中文→英 / 英→中文 / 只中文三种模式所需，共 3.80 MiB；若日后要压包，可只保留高频词条的中文音频并重建清单，听写会自动对缺条跳过中文（中文→英模式仍会补播英文，只中文模式则该词无发音、屏幕仍有中文题目）。
 
 ## 生成 / 更新发音
 
 ```bash
 python -m pip install edge-tts imageio-ffmpeg
+# 英文单词发音（audio/words/）
 python tools/gen_words_audio.py                 # 全部册次，跳过已存在文件（可断点续跑）
 python tools/gen_words_audio.py --grades g3b    # 只补某一册
 python tools/gen_words_audio.py --force         # 全部重新生成
 python tools/gen_words_audio.py --manifest-only # 只按现有 mp3 重建 data/word_audio.js
+# 中文释义发音（audio/cn/，供单词听写用）
+python tools/gen_cn_audio.py                    # 全部 944 条，跳过已存在（可断点续跑）
+python tools/gen_cn_audio.py --grades g3 g4     # 只补某些册
+python tools/gen_cn_audio.py --probe 24         # 只生成 24 条样本到临时目录，估算体积，不写清单
+python tools/gen_cn_audio.py --manifest-only    # 只按现有 mp3 重建 data/cn_audio.js
 ```
 
-脚本通过 `node tools/dump_audio_words.js` 读取 JS 词表（单一数据源），词条转文件名的规则见 `data/book_index.js` 的 `slug()`：小写、空格转下划线、撇号去掉（`two o'clock → two_oclock`）、连字符保留。生成完自动写入按册次分组的 `data/word_audio.js`。个别缩写有发音覆盖（`PE → P E`、`TV → T V`、`Mr → Mister`、`Ms/Mrs → Miss`、`OK → okay`）。改完词表后需重新执行 `node scripts/build.js` 更新产物。
+脚本通过 `node tools/dump_audio_words.js` / `node tools/dump_cn_audio_words.js` 读取 JS 词表（单一数据源），词条转文件名的规则见 `data/book_index.js` 的 `slug()`：小写、空格转下划线、撇号去掉（`two o'clock → two_oclock`）、连字符保留。两套发音**用同一个 slug**，因此一一对应；生成完分别写入 `data/word_audio.js` 与 `data/cn_audio.js`。英文个别缩写有发音覆盖（`PE → P E`、`TV → T V`、`Mr → Mister`、`Ms/Mrs → Miss`、`OK → okay`）；中文释义会先做朗读清洗（去括号补充、顿号/分号转停顿），屏幕显示仍用原文。中文音频为 44100Hz 单声道 48kbps 并裁掉首尾静音，全量约 3.80 MiB。改完词表后跑 `node tools/check_dictation.js` 确认两套清单一一对齐即可（源码直传无需构建；若用 `dist/wx/` 上传，再重跑一次 `node scripts/build.js` 同步产物）。
 
 ## 运行 / 调试
 
-1. **微信**：开发者工具 → 导入项目 → 选择本目录；`compileType: game`，AppID `wx4de65122514bb5e0`。（也可导入 `dist/wx/` 验证构建产物。）
-2. **抖音**：AppID 已配置为 `tt23d95564bda660c602`；执行 `node scripts/build.js --platform tt`，用抖音开发者工具导入 `dist/tt/`（首次导入时若工具提示 AppID 不匹配，以工具内填写的为准，构建脚本只负责写入配置）。
-3. **务必真机（iOS + 安卓）验证**：选任一册次，等分包下载完成后听单词发音是否出声。抖音模拟器中若曾出现 `no supported source was found` 导致无声，是前导斜杠绝对路径解析问题，已改为相对路径优先 + 失败自动切换（见上节）；重新构建并在 IDE 点「编译」刷新后复测。诊断时看 Console 的 `[audio] 路径加载失败 <路径>`：若三种写法都失败，说明该端 `InnerAudioContext` 不接受包内路径，需改用 `tt.getFileSystemManager().readFileSync()` 读包内文件 → 写入 `tt.env.USER_DATA_PATH` → 用该临时路径播放（官方明确支持临时路径，包内目录读取无需协议头）。若字母音有声而单词音仍是逐字母拼读，则问题只在分包资源访问，需单独验证分包映射。
-4. 抖音端还需确认 `tt.loadFont` 在目标基础库是否生效（低版本自动回退 `sans-serif`，只影响四线三格字形，不崩溃）。
-5. 发布：微信走「类目设置 → 资质审核 → 小程序备案 → 版本审核 → 发布」，不走虚拟支付的 IAA 路径预计 13~37 个工作日；抖音另需**软著（强制，游戏名须与登记名一致）+ ICP 备案**，宜与开发并行办理。分包不改变审核链路，也不额外收费。
+1. 微信开发者工具 → 导入项目 → **选择仓库根目录**（日常开发/调试/上传都走这里，无需先构建）；`compileType: game`，AppID `wx4de65122514bb5e0`。仅当要用构建快照时才导入 `dist/wx/`。
+2. **务必真机（iOS + 安卓）验证**：选任一册次，等分包下载完成后听单词发音是否出声。若曾出现 `no supported source was found` 导致无声，是前导斜杠绝对路径解析问题，已改为失败自动切换相对路径（见上节）；在 IDE 点「编译」刷新后复测（若用 `dist/wx/` 上传，需先重跑 `node scripts/build.js` 同步产物）。诊断时看 Console 的 `[audio] 路径加载失败 <路径>`：若绝对路径与相对路径都失败，说明该环境 `InnerAudioContext` 不接受包内路径，需改用 `wx.getFileSystemManager().readFileSync()` 读包内文件 → 写入 `wx.env.USER_DATA_PATH` → 用该临时路径播放。若字母音有声而单词音仍是逐字母拼读，则问题只在分包资源访问，需单独验证分包映射。
+3. 发布：走「类目设置 → 资质审核 → 小程序备案 → 版本审核 → 发布」，不走虚拟支付的 IAA 路径预计 13~37 个工作日。分包不改变审核链路，也不额外收费。
+
+## 转发分享
+
+> 正式版 + 已认证**也不会自动开启分享**——认证只给「使用资格」，开关要游戏代码自己打开。这正是「右上角『转发给朋友 / 分享到朋友圈』图标发灰、点不动」的原因。
+
+游戏启动时 `initShare()` 经 `platform/adapter.js` 做三件事（全部有 `try/catch` 兜底，任一 API 在低版本基础库缺失也不影响游戏）：
+
+1. `showShareMenu({ menus: ['shareAppMessage', 'shareTimeline'] })` —— 打开右上角两个菜单项，图标由灰变亮、可点击。
+2. `onShareAppMessage()` —— 自定义「转发给朋友/群」卡片的标题与图片（标题 `字母拼拼 · 听音辨形，边玩边学英语字母和单词`，带 `query=from=share` 便于后续统计来源）。
+3. `onShareTimeline()` —— 自定义「分享到朋友圈」卡片的标题。
+
+**转发卡片图**：`buildShareImage()` 用第二次 `adapter.createCanvas()` 拿到的**离屏画布**现画一张 5:4（500×400）渐变图（游戏名 + slogan），`toTempFilePathSync()` 导出临时路径作 `imageUrl`。**生成失败会自动留空，回退微信后台配置的小游戏 logo**，保证分享始终可用。官方推荐转发图比例 5:4。
+
+**朋友圈分享的限制（官方现行规则）**：从基础库 2.12.0 起支持、仍为 **beta、暂仅 Android**；不支持游戏内直接发起，只能走右上角菜单；好友在朋友圈打开是「预览模式」（场景值 1155，显示游戏界面截图、底部按钮才真正跳转）。因此分享主推「转发给朋友/群」，全平台可用；朋友圈作为安卓端的附加入口。
+
+**合规红线**：不做强制分享、不分享得奖励、不用明示/暗示样式诱导分享或引导发朋友圈——均属官方打击的「滥用分享」，会影响线上监管。当前只有右上角系统菜单 + 用户主动点按，无游戏内分享按钮，属最安全的自然分享形态。
 
 ## 费用与授权
 
@@ -160,12 +188,17 @@ python tools/gen_words_audio.py --manifest-only # 只按现有 mp3 重建 data/w
 - **四册上册词库与分包改造**：补齐三上 Unit 6；新增四/五/六上词表；647 个发音 mp3 按年级拆入四个分包；年级选择页加下载进度与失败回退。
 - **新增三下 / 四下**：新增 297 个发音 mp3 与 `g3b` / `g4b` 两个分包，册次增至 6 册、mp3 共 944 个；年级页改数据驱动滚动列表（点击/滑动分离）；slug 兼容撇号词。五下/六下新版未出版，旧版词表单独留存未接入。
 - **对对碰点读发音**：点击英文卡播该词发音、中文卡保持安静；发音模块加入连点互斥与拼读回退链终止，避免多词叠音；进入对对碰时若分包未下载会后台补下载。
-- **双端单仓库改造**：新增 `platform/adapter.js` 收口 13 个平台 API、`platform/sidebar.js` 侧边栏复访、`platform/tt/` 抖音配置（驼峰 `subPackages`）、`scripts/build.js` 双端构建与静态护栏；`dist/` 不入库。微信端冒烟测试行为不变。
-- **修复抖音模拟器无声**：包内音频路径改为按平台候选（抖音相对路径优先）+ `onError` 自动换写法重试 + Console 打印实际路径；`build.js` 在产物目录被 IDE 占用时退化为覆盖写入，不再中断构建。
-- **微信端目录与打包收尾**：微信端继续用仓库根目录开发；`packOptions.ignore` 补排除 `dist/` / `scripts/` / `platform/tt/`，避免 26 MiB 构建产物被打进主包（主包 27.24 MiB → 0.97 MiB）。
+- **平台 API 收口改造**：新增 `platform/adapter.js` 收口 13 个平台 API、`scripts/build.js` 构建与静态护栏；`dist/` 不入库。冒烟测试行为不变。
+- **修复模拟器无声**：包内音频路径改为绝对路径优先 + `onError` 自动换相对写法重试 + Console 打印实际路径；`build.js` 在产物目录被 IDE 占用时退化为覆盖写入，不再中断构建。
+- **打包收尾**：继续用仓库根目录开发；`packOptions.ignore` 补排除 `dist/` / `scripts/`，避免 26 MiB 构建产物被打进主包（主包 27.24 MiB → 0.97 MiB）。
+- **精简为微信单端**：移除抖音小游戏侧边栏复访、双端配置与构建分支，工程只保留微信小游戏一个平台。
 - **找字母暂时置灰**：新增 `FIND_LETTER_ENABLED` 开关（默认 `false`），导航页卡片灰底 + 深灰字 + 「即将到来」标签、点击不进入；拼单词入口不受影响。置灰卡片文字对比度一并修正。
-- **找字母恢复开放**：`FIND_LETTER_ENABLED` 改回 `true`，导航页「找字母」卡片恢复橙色高亮、副标题「听音找字母」、可点击进入 `home`；两端共用该开关，重建产物后生效。
+- **找字母恢复开放**：`FIND_LETTER_ENABLED` 改回 `true`，导航页「找字母」卡片恢复橙色高亮、副标题「听音找字母」、可点击进入 `home`。
 - **新增「字母连连」**：模式选择页新增第 5 张卡；字母网格 + 横/竖/L 形路径放置单词 + 干扰字母填充；拖动四邻接连线、正反向判定、连对复用答对弹框并播真实发音；`drawSpellDialog` 参数化以共用弹框；纯算法抽到 `utils/link.js` 并配 500 局自检脚本。
 - **字母连连候选项加行 + 释义列表优化**：网格由 6×6 改为 `LINK_GRID_COLS=6` / `LINK_GRID_ROWS=8`（+2 行，改 9 即 +3 行），`utils/link.js` 的 `buildPath` / `isValidPath` 改为支持矩形网格（下标 `r*cols+c`）；布局同时受可用宽高约束并给底部释义预留空间。底部中文提示保持 2 列与截断逻辑不变，新增「未找到在前、已找到沉底」动态排序（排序只作用于显示，不改目标词数组）与连对后回到顶部；仅中文列表区可上下滑动兜底，网格连线与列表滚动按落点互斥。拖动新增 8px 插值补格，快速划过不断线。
 - **目标词数改为按词长动态调整**：移除固定 `LINK_WORD_COUNT=5`，改为 `LINK_WORD_MIN` / `LINK_WORD_MAX` / `LINK_FILL_RATIO` 三个参数，`startLink()` 按已占用格数收手，短词章节多放、长词章节少放；中文列表行高与字号随词数自适应，尽量一屏放下、减少滑动。`tools/check_link.js` 升级为 600 局三档词长分布自检（短词 8.0 / 混合 6.5 / 长词 4.8 词），并校验路径合法性与动态选词确实生效。
 - **字母连连新增大小写版本切换**：右上角 `Aa / aa` 按钮在「大写版」与「小写英文版」间切换，网格字母（含干扰字母）与连对弹框单词同步改变大小写；内部 `linkGrid` 恒为大写、判定恒转小写，切换不重置本局进度。默认值由 `LINK_DEFAULT_LOWERCASE` 控制。同时修正一处理解偏差：**连对后中文提示仍显示中文并打勾**，不再自动替换成小写英文；中文提示与大小写版本完全解耦。
+- **新增「单词听写」+ 中文释义发音**：模式选择页第 6 张卡；用 edge-tts `zh-CN-XiaoxiaoNeural` 为全部 944 个词条生成中文释义发音（48kbps / 44100Hz / 裁静音，约 3.8 MiB），按英文 slug 与英文音频一一对应，放各年级分包 `audio/cn/`。三种发音模式 + 5/10/15/30 秒间隔 + 上一个/暂停/下一个手动切换，到点自动翻词并循环；新增 `speakSequence()` 串行播放并用代号打断旧序列防叠音。纯逻辑抽到 `utils/dictation.js`，`tools/check_dictation.js` 自检发音顺序、循环边界、间隔档位与两套清单一一对齐（944/944）。总包约 17.01 MiB，在微信 30 MiB 上限内。
+- **听写新增第四模式「只中文」**：在原有「中文→英 / 只英文 / 英→中文」之外新增 `cnOnly`（只念中文释义、不读英文），四种模式并存。`utils/dictation.js` 的 `DICT_MODES` 与 `buildDictParts()`、`game.js` 的模式按钮（改 4 等分、字号按屏宽收敛）、`tools/check_dictation.js` 的自检同步更新（含「只中文仅含单个中文片段、不含英文」断言，检查项 26→29）。默认值仍为 `cn`（中文→英）。
+- **构建降级为发布前可选**：微信单端原生无编译环节，日常开发/调试/上传直接导入仓库根目录即可，改完在 IDE 点「编译」生效，无需每次跑 `node scripts/build.js`；`build.js` 定位为发布前可选的干净快照 + 静态护栏 + 体积自检工具。`packOptions.ignore` 补排除 `docs/`（软著材料含全量源码明文）与 `.git/`，避免根目录直传时误打进代码包。
+- **放开转发分享**：正式版 + 已认证但右上角「转发给朋友 / 分享到朋友圈」仍置灰——原因是代码从未调 `showShareMenu` 打开菜单（认证只给资格、不自动开开关）。`adapter.js` 的 `API_LIST` 新增 `showShareMenu` / `onShareAppMessage` / `onShareTimeline` / `shareAppMessage`；`game.js` 新增 `initShare()` 在启动时打开两个菜单项、设置自定义卡片，`buildShareImage()` 用离屏 Canvas 现画 5:4 转发图（失败回退默认 logo）。全部经 adapter 收口，try/catch 兜底；无游戏内分享按钮，保持最安全的自然分享形态。

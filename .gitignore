@@ -4,8 +4,8 @@
 # 依赖
 node_modules/
 
-# 双端构建产物（scripts/build.js 生成，不入库）
+# 构建产物（scripts/build.js 生成，不入库）
 dist/
 
-# 开发者工具的个人本地设置（各端各自生成）
+# 开发者工具的个人本地设置
 project.private.config.json

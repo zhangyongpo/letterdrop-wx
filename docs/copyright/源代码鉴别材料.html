@@ -16,7 +16,7 @@
   .nm { font-weight: 600; }
   .pg { font-variant-numeric: tabular-nums; }
   pre {
-    margin: 0; font-family: inherit; font-size: 7.4pt; line-height: 1.28;
+    margin: 0; font-family: inherit; font-size: 7.5pt; line-height: 1.28;
     white-space: pre; overflow: visible; tab-size: 2;
   }
   @media screen {
@@ -32,24 +32,26 @@
   <pre>// ---------- game.js ----------
 // Copyright (c) 2026 zhangyongpo. SPDX-License-Identifier: Apache-2.0
 // 本文件为 letterdrop-wx 项目独立开发源码；许可证见 LICENSE，第三方资产声明见 NOTICE.md。
-// game.js —— 双端小游戏版（微信 / 抖音，原生 Canvas 2D，无 DOM / 无 WXML）
+// game.js —— 微信小游戏版（原生 Canvas 2D，无 DOM / 无 WXML）
 // 玩法：App 报出目标字母读音，屏幕上 6 个字母（3列×2排）掉落，
 // 玩家在落地前点中正确字母消除；不区分大小写；点错（干扰项）扣分（不低于0）；
 // 目标字母落地漏点扣 1 命；每 10 组速度 +1 档（无上限）；3 命结束。
-// 所有平台 API 统一经 platform/adapter.js 收口，本文件不直接引用 wx / tt。
+// 所有平台 API 统一经 platform/adapter.js 收口，本文件不直接引用 wx。
 const {
   LETTERS, GROUP_SIZE, COLS, MAX_TARGET_COUNT, GROUPS_PER_LEVEL,
   MAX_LIVES, CORRECT_SCORE, WRONG_PENALTY, speedForLevel, FIND_LETTER_ENABLED,
   LINK_WORD_MIN, LINK_WORD_MAX, LINK_FILL_RATIO,
-  LINK_GRID_COLS, LINK_GRID_ROWS, LINK_MAX_WORD_LEN, LINK_DEFAULT_LOWERCASE
+  LINK_GRID_COLS, LINK_GRID_ROWS, LINK_MAX_WORD_LEN, LINK_DEFAULT_LOWERCASE,
+  DICT_INTERVALS, DICT_DEFAULT_INTERVAL_IDX, DICT_DEFAULT_MODE, DICT_GAP_MS
 } = require('./config/gameConfig');
 const {
   announceLetter, announceWord, speakWord, unlockAudio,
+  speakSequence, stopSpeakSequence,
   setGrade, isGradeReady, loadGradeAudio
 } = require('./utils/audio');
 const adapter = require('./platform/adapter');
-const sidebar = require('./platform/sidebar');
 const { buildPath: linkBuildPath } = require('./utils/link');
+const { buildDictParts, wrapIndex } = require('./utils/dictation');
 // 英文印刷体（Andika，SIL 出品，OFL 开源可商用），专为初学者识字设计，字母形态清晰规范，
 // 小写 a/g 为课本标准双体结构，最贴近小学英语书写印刷体。用于拼单词页。
 // 平台的 loadFont 在游戏启动时加载一次，Canvas 用返回的字族名即可，加载完成前自动回退 sans-serif。
@@ -76,13 +78,13 @@ function setCurrentGrade(id) {
 const LETTER_COLORS = ['#ff7a18', '#ff5252', '#42a5f5', '#66bb6a', '#ab47bc', '#ffca28', '#26c6da', '#ec407a'];
 // iOS 音频会话解锁标记：首次用户触摸时激活，确保后续异步报音（字母掉落/拼词）在 iOS 出声
 let touchUnlocked = false;
-// 绘制圆角矩形路径（兼容各基础库，不依赖 ctx.roundRect）
-function roundRectPath(ctx, x, y, w, h, r) {
-  ctx.beginPath();</pre>
+// 绘制圆角矩形路径（兼容各基础库，不依赖 ctx.roundRect）</pre>
 </div>
 <div class="page">
   <div class="head"><span class="nm">字母拼拼小游戏软件 V1.0</span><span class="pg">第 2 页</span></div>
-  <pre>  ctx.moveTo(x + r, y);
+  <pre>function roundRectPath(ctx, x, y, w, h, r) {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
   ctx.arcTo(x + w, y, x + w, y + h, r);
   ctx.arcTo(x + w, y + h, x, y + h, r);
   ctx.arcTo(x, y + h, x, y, r);
@@ -119,7 +121,7 @@ bgGrad.addColorStop(1, '#ffe0b2');
 // ---- 游戏状态 ----
 // state: 'nav' | 'home' | 'playing' | 'gameover' | 'confirmExit'
 //         | 'grade' | 'loading' | 'loadFail' | 'chapter' | 'spellMode'
-//         | 'spell' | 'wordList' | 'match' | 'link'
+//         | 'spell' | 'wordList' | 'match' | 'link' | 'dictation'
 //   nav         —— 模式选择导航页（找字母 / 拼单词 两个模式均可进入）
 //   home        —— 找字母模式主页（由 FIND_LETTER_ENABLED 控制是否开放）
 //   playing     —— 找字母游戏中
@@ -128,14 +130,15 @@ bgGrad.addColorStop(1, '#ffe0b2');
 //   loading     —— 年级发音分包下载中（进度条）
 //   loadFail    —— 分包下载失败（可重试 / 仍要进入，发音回退逐字母拼读）
 //   chapter     —— 拼单词：二级菜单（具体章节 + 全部章节）
-//   spellMode   —— 练习模式选择（听音拼 / 中文转 / 查阅 / 对对碰 / 字母连连）
-//   spell       —— 拼单词：拼写练习（含答对后的弹框）
-//   link        —— 字母连连：字母网格拖动连线找单词（含答对弹框与完成态）
-let state = 'nav';</pre>
+//   spellMode   —— 练习模式选择（听音拼 / 中文转 / 查阅 / 对对碰 / 字母连连 / 单词听写）
+//   spell       —— 拼单词：拼写练习（含答对后的弹框）</pre>
 </div>
 <div class="page">
   <div class="head"><span class="nm">字母拼拼小游戏软件 V1.0</span><span class="pg">第 3 页</span></div>
-  <pre>let best = adapter.getStorageSync('letterdrop_best') || 0;
+  <pre>//   link        —— 字母连连：字母网格拖动连线找单词（含答对弹框与完成态）
+//   dictation   —— 单词听写：按间隔自动翻词并循环，四种发音模式，可手动上/下一个
+let state = 'nav';
+let best = adapter.getStorageSync('letterdrop_best') || 0;
 let score = 0;
 let lives = MAX_LIVES;
 let groupLevel = 1;
@@ -153,7 +156,6 @@ let startBtn = null;             // 首页“开始游戏”按钮区域
 let restartBtn = null;           // 结束页“再来一局”按钮区域
 let navFindBtn = null;           // 导航页“找字母”菜单区域
 let navSpellBtn = null;          // 导航页“拼单词”菜单区域
-let sidebarBtn = null;           // 导航页侧边栏复访入口（仅抖音端显示）
 let backBtn = null;              // 返回导航页按钮（主页/结束页左上角）
 let exitBtn = null;              // 游戏中左上角“退出”按钮
 let exitConfirmBtn = null;       // 退出确认弹框“确定退出”按钮
@@ -182,13 +184,13 @@ let spellOrder = [];             // 已选字母对应的候选下标顺序
 let spellSolved = false;         // 当前单词是否已拼对（显示弹框）
 let spellBackBtn = null;         // 拼写页返回按钮（左上角）
 let spellSpeakerBtn = null;      // 拼写页小喇叭按钮（底部）
-let spellNextBtn = null;         // 答对弹框“下一个”按钮
-let spellDialogSpeakBtn = null;  // 答对弹框“听发音”按钮
-// 单词表（查阅）相关</pre>
+let spellNextBtn = null;         // 答对弹框“下一个”按钮</pre>
 </div>
 <div class="page">
   <div class="head"><span class="nm">字母拼拼小游戏软件 V1.0</span><span class="pg">第 4 页</span></div>
-  <pre>let wordListChapterId = '';      // 来自哪个章节（返回时用）
+  <pre>let spellDialogSpeakBtn = null;  // 答对弹框“听发音”按钮
+// 单词表（查阅）相关
+let wordListChapterId = '';      // 来自哪个章节（返回时用）
 let wordListName = '';           // 章节名（标题展示）
 let wordListItems = [];          // 单词列表：{ en, cn }
 let wordListScrollY = 0;         // 列表滚动偏移
@@ -235,15 +237,33 @@ let linkCaseBtn = null;            // 大小写版本切换按钮（右上角）
 // 不随 startLink() 重置，玩家切换一次后在本次游戏会话内保持。
 let linkLowercase = LINK_DEFAULT_LOWERCASE;
 let linkChapterName = '';          // 章节名（标题展示）
-let linkListTop = 0;               // 底部释义列表可视区上沿
-let linkListBottom = 0;            // 底部释义列表可视区下沿
-let linkListContentH = 0;          // 释义列表内容总高（含折行）</pre>
+let linkListTop = 0;               // 底部释义列表可视区上沿</pre>
 </div>
 <div class="page">
   <div class="head"><span class="nm">字母拼拼小游戏软件 V1.0</span><span class="pg">第 5 页</span></div>
-  <pre>let linkListScrollY = 0;           // 释义列表滚动偏移
+  <pre>let linkListBottom = 0;            // 底部释义列表可视区下沿
+let linkListContentH = 0;          // 释义列表内容总高（含折行）
+let linkListScrollY = 0;           // 释义列表滚动偏移
 let linkListDragging = false;      // 是否正在拖动释义列表（与网格连线互斥）
 let linkListLastY = null;          // 拖动释义列表时的上一个触点 Y
+// ---- 单词听写（dictation）相关状态 ----
+// 按玩家选定的间隔自动翻词并循环；中文→英 / 只英文 / 英→中文 / 只中文四种模式只控制「发音内容与顺序」，
+// 屏幕始终给出中文释义作为听写题目，英文默认遮住、点卡片可揭晓。
+let dictWords = [];                // 当前章节词条 [{en, cn}]（含短语）
+let dictIndex = 0;                 // 当前词条下标
+let dictMode = DICT_DEFAULT_MODE;  // 'cn' 中文→英文 | 'en' 只英文 | 'both' 英文→中文 | 'cnOnly' 只中文
+let dictIntervalIdx = DICT_DEFAULT_INTERVAL_IDX;  // DICT_INTERVALS 的下标
+let dictTimerMs = 0;               // 距下一次自动翻词的剩余时间(ms)
+let dictPlaying = true;            // 是否自动翻词（可暂停，手动切换仍可用）
+let dictShowEn = false;            // 是否揭晓英文
+let dictBackBtn = null;
+let dictPrevBtn = null;
+let dictNextBtn = null;
+let dictPlayBtn = null;
+let dictCardRect = null;
+let dictModeBtns = [];             // [{rect, mode}]
+let dictIntervalBtns = [];         // [{rect, idx}]
+let dictChapterName = '';
 // ---- 流程控制 ----
 function startGame() {
   if (groupTimer) clearTimeout(groupTimer);
@@ -270,8 +290,11 @@ function startGroup() {
   const groupLetters = [];
   if (targetCount === 2) {
     groupLetters.push({ char: target, display: target });                  // 大写目标
-    groupLetters.push({ char: target, display: target.toLowerCase() });    // 小写目标
-  } else {
+    groupLetters.push({ char: target, display: target.toLowerCase() });    // 小写目标</pre>
+</div>
+<div class="page">
+  <div class="head"><span class="nm">字母拼拼小游戏软件 V1.0</span><span class="pg">第 6 页</span></div>
+  <pre>  } else {
     const tDisp = Math.random() &lt; 0.5 ? target : target.toLowerCase();
     groupLetters.push({ char: target, display: tDisp });
   }
@@ -290,11 +313,8 @@ function startGroup() {
     const col = idx % COLS;
     const row = Math.floor(idx / COLS);
     const x = colW * (col + 0.5);
-    const y = -size * 2 - row * rowGap;</pre>
-</div>
-<div class="page">
-  <div class="head"><span class="nm">字母拼拼小游戏软件 V1.0</span><span class="pg">第 6 页</span></div>
-  <pre>    letters.push({
+    const y = -size * 2 - row * rowGap;
+    letters.push({
       char: g.char,
       display: g.display,
       x, y, size,
@@ -323,8 +343,11 @@ function endGame() {
 // 必含该单词所需的全部字母（含重复），其余为随机干扰项。
 function buildCandidates(word) {
   const need = word.split('');              // 已含单词内的重复字母
-  const n = need.length;
-  let total = n * 2 + Math.floor(Math.random() * (n + 1)); // 区间 [2n, 3n]
+  const n = need.length;</pre>
+</div>
+<div class="page">
+  <div class="head"><span class="nm">字母拼拼小游戏软件 V1.0</span><span class="pg">第 7 页</span></div>
+  <pre>  let total = n * 2 + Math.floor(Math.random() * (n + 1)); // 区间 [2n, 3n]
   if (total &lt; 6) total = 6;                 // 最少 6 个
   const pool = need.slice();
   const alpha = 'abcdefghijklmnopqrstuvwxyz';
@@ -343,11 +366,8 @@ function loadSpellWord(i) {
   spellCandidates = buildCandidates(spellWord);
   spellOrder = [];
   spellSolved = false;
-}</pre>
-</div>
-<div class="page">
-  <div class="head"><span class="nm">字母拼拼小游戏软件 V1.0</span><span class="pg">第 7 页</span></div>
-  <pre>// 进入某章节的拼写练习
+}
+// 进入某章节的拼写练习
 function startSpellChapter(chapterId, mode) {
   const ch = SPELL_CHAPTERS.find((c) =&gt; c.id === chapterId);
   if (!ch) return;
@@ -376,8 +396,11 @@ function startSpellChapter(chapterId, mode) {
     setTimeout(() =&gt; { if (state === 'spell') speakWord(spellWord); }, 350);
   }
 }
-// 进入某章节的“全部单词”查阅页：列出该单元下所有单词（中英文 + 小喇叭）
-function enterWordList(chapterId) {
+// 进入某章节的“全部单词”查阅页：列出该单元下所有单词（中英文 + 小喇叭）</pre>
+</div>
+<div class="page">
+  <div class="head"><span class="nm">字母拼拼小游戏软件 V1.0</span><span class="pg">第 8 页</span></div>
+  <pre>function enterWordList(chapterId) {
   const ch = SPELL_CHAPTERS.find((c) =&gt; c.id === chapterId);
   if (!ch) return;
   wordListChapterId = chapterId;
@@ -396,11 +419,8 @@ function enterWordList(chapterId) {
   // 去重（按英文小写），避免 welcome 与单元重复词反复出现；保留首次出现的中文
   const seen = {};
   wordListItems = [];
-  words.forEach((w) =&gt; {</pre>
-</div>
-<div class="page">
-  <div class="head"><span class="nm">字母拼拼小游戏软件 V1.0</span><span class="pg">第 8 页</span></div>
-  <pre>    const k = w.en.toLowerCase();
+  words.forEach((w) =&gt; {
+    const k = w.en.toLowerCase();
     if (!seen[k]) { seen[k] = 1; wordListItems.push({ en: w.en, cn: w.cn }); }
   });
   wordListScrollY = 0;
@@ -429,8 +449,11 @@ function toggleCandidate(idx) {
     const oi = spellOrder.indexOf(idx);
     if (oi &gt;= 0) spellOrder.splice(oi, 1);
     c.selected = false;
-  } else {
-    c.selected = true;
+  } else {</pre>
+</div>
+<div class="page">
+  <div class="head"><span class="nm">字母拼拼小游戏软件 V1.0</span><span class="pg">第 9 页</span></div>
+  <pre>    c.selected = true;
     spellOrder.push(idx);
   }
   const input = spellOrder.map((i) =&gt; spellCandidates[i].ch).join('');
@@ -449,11 +472,8 @@ function update(dt) {
     l.y += speed * dt;
     if (l.y + l.size &gt; H) {
       if (l.char.toUpperCase() === target) missedTarget = true; // 漏掉目标字母 -&gt; 扣命
-      // 干扰项落地不扣分</pre>
-</div>
-<div class="page">
-  <div class="head"><span class="nm">字母拼拼小游戏软件 V1.0</span><span class="pg">第 9 页</span></div>
-  <pre>    } else {
+      // 干扰项落地不扣分
+    } else {
       remaining.push(l);
     }
   }
@@ -482,8 +502,11 @@ function onTapLetter(px, py) {
     const l = letters[i];
     if (Math.abs(l.x - px) &lt; l.size &amp;&amp; Math.abs(l.y - py) &lt; l.size) {
       if (l.char.toUpperCase() === target) {
-        letters.splice(i, 1);
-        foundThisGroup += 1;
+        letters.splice(i, 1);</pre>
+</div>
+<div class="page">
+  <div class="head"><span class="nm">字母拼拼小游戏软件 V1.0</span><span class="pg">第 10 页</span></div>
+  <pre>        foundThisGroup += 1;
         score += CORRECT_SCORE;
         scoreBumpTimer = 250;
         if (score &gt; best) {
@@ -502,11 +525,8 @@ function onTapLetter(px, py) {
         // 点错（点到干扰项）-&gt; 扣分并移除
         letters.splice(i, 1);
         score = Math.max(0, score - WRONG_PENALTY); // 扣分，不低于 0
-      }</pre>
-</div>
-<div class="page">
-  <div class="head"><span class="nm">字母拼拼小游戏软件 V1.0</span><span class="pg">第 10 页</span></div>
-  <pre>      break;
+      }
+      break;
     }
   }
 }
@@ -535,8 +555,11 @@ function drawLetter(l) {
 function drawSpellTile(x, y, size, ch, selected, idx) {
   const r = Math.min(14, size / 2);
   ctx.fillStyle = LETTER_COLORS[idx % LETTER_COLORS.length];
-  roundRectPath(ctx, x, y, size, size, r);
-  ctx.fill();
+  roundRectPath(ctx, x, y, size, size, r);</pre>
+</div>
+<div class="page">
+  <div class="head"><span class="nm">字母拼拼小游戏软件 V1.0</span><span class="pg">第 11 页</span></div>
+  <pre>  ctx.fill();
   ctx.lineWidth = selected ? 5 : 3;
   ctx.strokeStyle = selected ? '#5a2d00' : 'rgba(255,255,255,0.85)';
   roundRectPath(ctx, x, y, size, size, r);
@@ -555,11 +578,8 @@ function drawSpellTile(x, y, size, ch, selected, idx) {
     ctx.beginPath(); ctx.arc(bx, by, br, 0, Math.PI * 2); ctx.fill();
     ctx.strokeStyle = '#ffffff';
     ctx.lineWidth = 2.5;
-    ctx.beginPath();</pre>
-</div>
-<div class="page">
-  <div class="head"><span class="nm">字母拼拼小游戏软件 V1.0</span><span class="pg">第 11 页</span></div>
-  <pre>    ctx.moveTo(bx - br * 0.4, by);
+    ctx.beginPath();
+    ctx.moveTo(bx - br * 0.4, by);
     ctx.lineTo(bx - br * 0.1, by + br * 0.35);
     ctx.lineTo(bx + br * 0.45, by - br * 0.4);
     ctx.stroke();
@@ -588,8 +608,11 @@ function drawBackButton(rect) {
   ctx.lineWidth = 1.5;
   ctx.strokeStyle = 'rgba(90,45,0,0.22)';
   roundRectPath(ctx, rect.x, rect.y, rect.w, rect.h, r);
-  ctx.stroke();
-  // 两段式线条返回箭头（指向左）
+  ctx.stroke();</pre>
+</div>
+<div class="page">
+  <div class="head"><span class="nm">字母拼拼小游戏软件 V1.0</span><span class="pg">第 12 页</span></div>
+  <pre>  // 两段式线条返回箭头（指向左）
   const cy = rect.y + rect.h / 2;
   const tipX = rect.x + rect.w * 0.40;        // 顶点（最左）
   const armX = rect.x + rect.w * 0.62;         // 右端（两臂汇聚的反向点）
@@ -608,11 +631,8 @@ function drawBackButton(rect) {
 function drawHome() {
   ctx.fillStyle = bgGrad;
   ctx.fillRect(0, 0, W, H);
-  ctx.textAlign = 'center';</pre>
-</div>
-<div class="page">
-  <div class="head"><span class="nm">字母拼拼小游戏软件 V1.0</span><span class="pg">第 12 页</span></div>
-  <pre>  ctx.textBaseline = 'middle';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
   // 左上角返回按钮：回到模式选择导航页
   backBtn = { x: 14, y: 14, w: 52, h: 40 };
   drawBackButton(backBtn);
@@ -641,8 +661,11 @@ function drawHome() {
   // 最高分：超长自动缩小
   const bestText = '最高分：' + best;
   let bestSize = 24;
-  ctx.font = bestSize + 'px sans-serif';
-  let bW = ctx.measureText(bestText).width;
+  ctx.font = bestSize + 'px sans-serif';</pre>
+</div>
+<div class="page">
+  <div class="head"><span class="nm">字母拼拼小游戏软件 V1.0</span><span class="pg">第 13 页</span></div>
+  <pre>  let bW = ctx.measureText(bestText).width;
   if (bW &gt; W * 0.9) bestSize = Math.floor(bestSize * (W * 0.9) / bW);
   ctx.font = bestSize + 'px sans-serif';
   ctx.fillStyle = '#b06a2b';
@@ -661,11 +684,8 @@ function drawNav() {
   if (tW &gt; W * 0.92) titleSize = Math.floor(titleSize * (W * 0.92) / tW);
   ctx.font = 'bold ' + titleSize + 'px sans-serif';
   ctx.fillStyle = '#5a2d00';
-  ctx.fillText('字母拼拼', W / 2, H * 0.16);</pre>
-</div>
-<div class="page">
-  <div class="head"><span class="nm">字母拼拼小游戏软件 V1.0</span><span class="pg">第 13 页</span></div>
-  <pre>  // 副标题
+  ctx.fillText('字母拼拼', W / 2, H * 0.16);
+  // 副标题
   const sub = '选择一个模式开始吧';
   let subSize = Math.min(22, W * 0.055);
   ctx.font = subSize + 'px sans-serif';
@@ -685,24 +705,6 @@ function drawNav() {
     FIND_LETTER_ENABLED ? '听音找字母' : '暂未开放', FIND_LETTER_ENABLED);
   navSpellBtn = { x: W / 2 - cardW / 2, y: startY + cardH + gap, w: cardW, h: cardH };
   drawMenuCard(navSpellBtn, '拼单词', '按序拼单词', true);
-  // 抖音小游戏必接「侧边栏复访」：仅在抖音端绘制可见入口，微信端完全不出现。
-  sidebarBtn = null;
-  if (sidebar.available()) {
-    const bw = Math.min(230, W - 80);
-    const bh = 42;
-    sidebarBtn = { x: W / 2 - bw / 2, y: H - 76, w: bw, h: bh };
-    ctx.save();
-    ctx.fillStyle = 'rgba(255, 255, 255, 0.9)';
-    roundRectPath(ctx, sidebarBtn.x, sidebarBtn.y, sidebarBtn.w, sidebarBtn.h, bh / 2);
-    ctx.fill();
-    ctx.strokeStyle = '#e0a35a';
-    ctx.lineWidth = 1;
-    ctx.stroke();
-    ctx.font = '15px sans-serif';
-    ctx.fillStyle = '#8a5a2b';
-    ctx.fillText('加入侧边栏 · 下次快速进入', W / 2, sidebarBtn.y + bh / 2);
-    ctx.restore();
-  }
 }
 // 绘制一张菜单卡片（enabled=false 时置灰并显示“即将到来”标签）
 function drawMenuCard(rect, title, sub, enabled, titleSize) {
@@ -712,13 +714,13 @@ function drawMenuCard(rect, title, sub, enabled, titleSize) {
   ctx.fill();
   ctx.lineWidth = 3;
   ctx.strokeStyle = 'rgba(255,255,255,0.6)';
-  roundRectPath(ctx, rect.x, rect.y, rect.w, rect.h, r);
-  ctx.stroke();
-  if (!titleSize || titleSize &lt; 12) titleSize = 34;  // 未指定时沿用默认</pre>
+  roundRectPath(ctx, rect.x, rect.y, rect.w, rect.h, r);</pre>
 </div>
 <div class="page">
   <div class="head"><span class="nm">字母拼拼小游戏软件 V1.0</span><span class="pg">第 14 页</span></div>
-  <pre>  ctx.textAlign = 'left';
+  <pre>  ctx.stroke();
+  if (!titleSize || titleSize &lt; 12) titleSize = 34;  // 未指定时沿用默认
+  ctx.textAlign = 'left';
   ctx.textBaseline = 'middle';
   // 置灰卡片底色是浅灰 #cfcfcf，文字改用深灰，避免白字压浅底看不清
   ctx.fillStyle = enabled ? '#ffffff' : '#5f5f5f';
@@ -765,13 +767,13 @@ function drawPlaying() {
   ctx.translate(W / 2, 56);
   ctx.scale(bump, bump);
   ctx.fillStyle = '#ff7a18';
-  ctx.font = 'bold 44px sans-serif';
-  ctx.fillText('得分 ' + score, 0, 0);
-  ctx.restore();</pre>
+  ctx.font = 'bold 44px sans-serif';</pre>
 </div>
 <div class="page">
   <div class="head"><span class="nm">字母拼拼小游戏软件 V1.0</span><span class="pg">第 15 页</span></div>
-  <pre>  // 左上角“退出”按钮：游戏中可发起退出（弹框二次确认）
+  <pre>  ctx.fillText('得分 ' + score, 0, 0);
+  ctx.restore();
+  // 左上角“退出”按钮：游戏中可发起退出（弹框二次确认）
   exitBtn = { x: 20, y: 20, w: 84, h: 44 };
   ctx.fillStyle = 'rgba(255,255,255,0.85)';
   roundRectPath(ctx, exitBtn.x, exitBtn.y, exitBtn.w, exitBtn.h, 22);
@@ -818,13 +820,13 @@ function drawExitConfirm() {
   ctx.fillText('继续', exitCancelBtn.x + btnW / 2, exitCancelBtn.y + btnH / 2);
   // 确定退出（确认）
   exitConfirmBtn = { x: cardX + 40 + btnW, y: btnY, w: btnW, h: btnH };
-  ctx.fillStyle = '#ff7a18';
-  roundRectPath(ctx, exitConfirmBtn.x, exitConfirmBtn.y, exitConfirmBtn.w, exitConfirmBtn.h, 16);
-  ctx.fill();</pre>
+  ctx.fillStyle = '#ff7a18';</pre>
 </div>
 <div class="page">
   <div class="head"><span class="nm">字母拼拼小游戏软件 V1.0</span><span class="pg">第 16 页</span></div>
-  <pre>  ctx.fillStyle = '#ffffff';
+  <pre>  roundRectPath(ctx, exitConfirmBtn.x, exitConfirmBtn.y, exitConfirmBtn.w, exitConfirmBtn.h, 16);
+  ctx.fill();
+  ctx.fillStyle = '#ffffff';
   ctx.font = 'bold 26px sans-serif';
   ctx.fillText('退出', exitConfirmBtn.x + btnW / 2, exitConfirmBtn.y + btnH / 2);
 }
@@ -871,13 +873,13 @@ function drawSpeaker(rect) {
   const by = cy - bh / 2;
   ctx.fillStyle = '#ffffff';
   ctx.fillRect(bx, by, bw * 0.55, bh);                 // 喇叭主体
-  ctx.beginPath();                                      // 喇叭锥
-  ctx.moveTo(bx + bw * 0.55, by);
-  ctx.lineTo(bx + bw * 1.15, by - bh * 0.35);</pre>
+  ctx.beginPath();                                      // 喇叭锥</pre>
 </div>
 <div class="page">
   <div class="head"><span class="nm">字母拼拼小游戏软件 V1.0</span><span class="pg">第 17 页</span></div>
-  <pre>  ctx.lineTo(bx + bw * 1.15, by + bh * 1.35);
+  <pre>  ctx.moveTo(bx + bw * 0.55, by);
+  ctx.lineTo(bx + bw * 1.15, by - bh * 0.35);
+  ctx.lineTo(bx + bw * 1.15, by + bh * 1.35);
   ctx.lineTo(bx + bw * 0.55, by + bh);
   ctx.closePath();
   ctx.fill();
@@ -924,13 +926,13 @@ function drawGrade() {
   });
   ctx.restore();
   if (maxScroll &gt; 0) {
-    ctx.fillStyle = '#a9713d';
-    ctx.font = '13px sans-serif';
-    ctx.fillText('上下滑动查看更多册次', W / 2, H - 10);</pre>
+    ctx.fillStyle = '#a9713d';</pre>
 </div>
 <div class="page">
   <div class="head"><span class="nm">字母拼拼小游戏软件 V1.0</span><span class="pg">第 18 页</span></div>
-  <pre>  }
+  <pre>    ctx.font = '13px sans-serif';
+    ctx.fillText('上下滑动查看更多册次', W / 2, H - 10);
+  }
 }
 // 进入某年级：已加载则直接进章节页，否则先下载该年级的发音分包
 function enterGrade(id) {
@@ -977,13 +979,13 @@ function drawLoading() {
   ctx.fillText(loadingGradeName + ' · 首次进入需下载', W / 2, H * 0.40);
   const bw = Math.min(280, W - 80), bx = W / 2 - bw / 2, by = H * 0.48, bh = 16;
   ctx.fillStyle = 'rgba(255,255,255,0.95)';
-  roundRectPath(ctx, bx, by, bw, bh, 8);
-  ctx.fill();
-  const p = Math.max(0, Math.min(100, loadingProgress));</pre>
+  roundRectPath(ctx, bx, by, bw, bh, 8);</pre>
 </div>
 <div class="page">
   <div class="head"><span class="nm">字母拼拼小游戏软件 V1.0</span><span class="pg">第 19 页</span></div>
-  <pre>  const fw = Math.max(2, bw * p / 100);
+  <pre>  ctx.fill();
+  const p = Math.max(0, Math.min(100, loadingProgress));
+  const fw = Math.max(2, bw * p / 100);
   if (p &gt; 0) {
     ctx.fillStyle = '#ff7a18';
     roundRectPath(ctx, bx, by, Math.min(fw, bw), bh, Math.min(8, fw / 2));
@@ -1030,13 +1032,13 @@ function drawChapter() {
   ctx.fillText(BOOK.title, W / 2, H * 0.10);
   ctx.fillStyle = '#8a5a2b';
   ctx.font = (Math.min(20, W * 0.05)) + 'px sans-serif';
-  ctx.fillText('选择章节开始练习', W / 2, H * 0.17);
-  const startY = Math.round(H * 0.22);
-  const rowH = 72;</pre>
+  ctx.fillText('选择章节开始练习', W / 2, H * 0.17);</pre>
 </div>
 <div class="page">
   <div class="head"><span class="nm">字母拼拼小游戏软件 V1.0</span><span class="pg">第 20 页</span></div>
-  <pre>  const gap = 16;
+  <pre>  const startY = Math.round(H * 0.22);
+  const rowH = 72;
+  const gap = 16;
   const listTop = startY;
   const listBottom = H - 24;
   const listH = listBottom - listTop;
@@ -1083,13 +1085,13 @@ function drawSpellMode() {
   ctx.fillRect(0, 0, W, H);
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
-  // 左上角返回按钮：回到章节选择
-  spellModeBackBtn = { x: 14, y: 14, w: 52, h: 40 };
-  drawBackButton(spellModeBackBtn);</pre>
+  // 左上角返回按钮：回到章节选择</pre>
 </div>
 <div class="page">
   <div class="head"><span class="nm">字母拼拼小游戏软件 V1.0</span><span class="pg">第 21 页</span></div>
-  <pre>  // 标题
+  <pre>  spellModeBackBtn = { x: 14, y: 14, w: 52, h: 40 };
+  drawBackButton(spellModeBackBtn);
+  // 标题
   let titleSize = Math.min(36, W * 0.095);
   ctx.font = 'bold ' + titleSize + 'px sans-serif';
   ctx.fillStyle = '#5a2d00';
@@ -1102,13 +1104,14 @@ function drawSpellMode() {
     { mode: 'words', title: '全部单词', sub: '浏览本单元所有单词' },
     { mode: 'match', title: '单词对对碰', sub: '点英文卡听发音，英中配对消除' },
     { mode: 'link', title: '字母连连', sub: '拖动字母连成单词' },
+    { mode: 'dict', title: '单词听写', sub: '按节奏听发音，写单词' },
   ];
   const n = modes.length;
-  // 卡片高度自适应：5 张卡时收紧间距与最小高度，保证小屏也能完整放下（不溢出）
+  // 卡片高度自适应：卡数越多越收紧间距与最小高度，保证小屏也能完整放下（不溢出）
   const topY = H * 0.205;
   const bottomPad = 20;
-  const gap = n &gt;= 5 ? 10 : 16;
-  const cardH = Math.max(62, Math.min(96, (H - topY - bottomPad - gap * (n - 1)) / n));
+  const gap = n &gt;= 6 ? 8 : (n &gt;= 5 ? 10 : 16);
+  const cardH = Math.max(56, Math.min(96, (H - topY - bottomPad - gap * (n - 1)) / n));
   const startY = topY;
   spellModeCards = [];
   modes.forEach((m, i) =&gt; {
@@ -1135,14 +1138,14 @@ function drawWordList() {
   const listBottom = H - 20;
   const listH = listBottom - listTop;
   const rowH = 60, gap = 8;
-  const contentH = wordListItems.length * (rowH + gap);
-  const maxScroll = Math.max(0, contentH - listH);
-  if (wordListScrollY &gt; maxScroll) wordListScrollY = maxScroll;
-  wordListSpeakers = [];</pre>
+  const contentH = wordListItems.length * (rowH + gap);</pre>
 </div>
 <div class="page">
   <div class="head"><span class="nm">字母拼拼小游戏软件 V1.0</span><span class="pg">第 22 页</span></div>
-  <pre>  ctx.save();
+  <pre>  const maxScroll = Math.max(0, contentH - listH);
+  if (wordListScrollY &gt; maxScroll) wordListScrollY = maxScroll;
+  wordListSpeakers = [];
+  ctx.save();
   ctx.beginPath();
   ctx.rect(0, listTop, W, listH);
   ctx.clip();
@@ -1188,14 +1191,14 @@ function getChapterWordsPlain(chapterId) {
       const c = BOOK.chapters.find((x) =&gt; x.id === id);
       if (c) words.push(...c.words);
     });
-  } else {
-    const ch = SPELL_CHAPTERS.find((c) =&gt; c.id === chapterId);
-    words = ch ? ch.words : [];
-  }</pre>
+  } else {</pre>
 </div>
 <div class="page">
   <div class="head"><span class="nm">字母拼拼小游戏软件 V1.0</span><span class="pg">第 23 页</span></div>
-  <pre>  const seen = new Set();
+  <pre>    const ch = SPELL_CHAPTERS.find((c) =&gt; c.id === chapterId);
+    words = ch ? ch.words : [];
+  }
+  const seen = new Set();
   const res = [];
   words.forEach((w) =&gt; {
     const en = (w.en || '').trim();
@@ -1241,14 +1244,14 @@ function startMatch(chapterId) {
       if (curW + add &gt; availW &amp;&amp; cur.length &gt; 0) { rows.push(cur); cur = []; curW = 0; }
       cur.push(b);
       curW += (cur.length === 1 ? b._w : b._w + gap);
-    }
-    if (cur.length) rows.push(cur);
-    const rowH = (availH - gap * (rows.length - 1)) / rows.length;
-    return { rows, rowH };</pre>
+    }</pre>
 </div>
 <div class="page">
   <div class="head"><span class="nm">字母拼拼小游戏软件 V1.0</span><span class="pg">第 24 页</span></div>
-  <pre>  }
+  <pre>    if (cur.length) rows.push(cur);
+    const rowH = (availH - gap * (rows.length - 1)) / rows.length;
+    return { rows, rowH };
+  }
   // 随机选词 + 自适应单词对数（行高保持在合理范围）
   let need = Math.min(words.length, 14);
   let rows = [], rowH = 0;
@@ -1294,14 +1297,14 @@ function startMatch(chapterId) {
     y += rowH + gap;
   }
   matchSel = null;
-  matchDone = false;
-  matchMsg = '';
-  matchMsgTimer = 0;
-  state = 'match';</pre>
+  matchDone = false;</pre>
 </div>
 <div class="page">
   <div class="head"><span class="nm">字母拼拼小游戏软件 V1.0</span><span class="pg">第 25 页</span></div>
-  <pre>}
+  <pre>  matchMsg = '';
+  matchMsgTimer = 0;
+  state = 'match';
+}
 // 单词对对碰：渲染棋盘
 function drawMatch() {
   ctx.fillStyle = bgGrad;
@@ -1347,14 +1350,14 @@ function hexToRgb(h) {
   return [parseInt(h.substr(0, 2), 16), parseInt(h.substr(2, 2), 16), parseInt(h.substr(4, 2), 16)];
 }
 function lerpColor(a, b, t) {
-  t = Math.max(0, Math.min(1, t));
-  const pa = hexToRgb(a), pb = hexToRgb(b);
-  const r = Math.round(pa[0] + (pb[0] - pa[0]) * t);
-  const g = Math.round(pa[1] + (pb[1] - pa[1]) * t);</pre>
+  t = Math.max(0, Math.min(1, t));</pre>
 </div>
 <div class="page">
   <div class="head"><span class="nm">字母拼拼小游戏软件 V1.0</span><span class="pg">第 26 页</span></div>
-  <pre>  const bl = Math.round(pa[2] + (pb[2] - pa[2]) * t);
+  <pre>  const pa = hexToRgb(a), pb = hexToRgb(b);
+  const r = Math.round(pa[0] + (pb[0] - pa[0]) * t);
+  const g = Math.round(pa[1] + (pb[1] - pa[1]) * t);
+  const bl = Math.round(pa[2] + (pb[2] - pa[2]) * t);
   return 'rgb(' + r + ',' + g + ',' + bl + ')';
 }
 // 渲染单个块（英文浅蓝、中文浅橙；选中高亮；配对成功翻转消失）
@@ -1400,14 +1403,14 @@ function drawMatchBlock(b) {
     if (b.type === 'en') {
       ctx.fillStyle = '#1565c0';
       let fs = Math.min(MATCH_EN_FS, b.h * 0.5);
-      const fam = (SPELL_FONT || 'sans-serif');
-      ctx.font = 'bold ' + fs + 'px ' + fam;
-      while (ctx.measureText(b.text).width &gt; maxW &amp;&amp; fs &gt; 10) {
-        fs -= 1; ctx.font = 'bold ' + fs + 'px ' + fam;</pre>
+      const fam = (SPELL_FONT || 'sans-serif');</pre>
 </div>
 <div class="page">
   <div class="head"><span class="nm">字母拼拼小游戏软件 V1.0</span><span class="pg">第 27 页</span></div>
-  <pre>      }
+  <pre>      ctx.font = 'bold ' + fs + 'px ' + fam;
+      while (ctx.measureText(b.text).width &gt; maxW &amp;&amp; fs &gt; 10) {
+        fs -= 1; ctx.font = 'bold ' + fs + 'px ' + fam;
+      }
       ctx.fillText(b.text, b.x + b.w / 2, b.y + b.h / 2);
     } else {
       ctx.fillStyle = '#8a5a2b';
@@ -1453,14 +1456,14 @@ function onMatchTap(b) {
     matchSel = null;
     matchMsg = '不匹配，再试试～';
     matchMsgTimer = 1100;
-  }
-}
-// 拼单词练习页
-function drawSpell() {</pre>
+  }</pre>
 </div>
 <div class="page">
   <div class="head"><span class="nm">字母拼拼小游戏软件 V1.0</span><span class="pg">第 28 页</span></div>
-  <pre>  ctx.fillStyle = bgGrad;
+  <pre>}
+// 拼单词练习页
+function drawSpell() {
+  ctx.fillStyle = bgGrad;
   ctx.fillRect(0, 0, W, H);
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
@@ -1506,14 +1509,14 @@ function drawSpell() {</pre>
                                      : '点击下方字母，拼出听到的单词', W / 2, (lineY[1] + lineY[2]) / 2);
   } else {
     // 所有字母统一字号，以“书写基线”对齐四线格的基线 lineY[2]，按字体自身度量自然落位：
-    // 中格字母正好落在中格、上伸字母自然上伸、下伸字母自然下伸，不会踩线。
-    // 先用小写 'x' 的实际字高（x-height）校准字号，使 x-height 正好等于中格高度 lineGap。
-    const family = SPELL_FONT || 'sans-serif';
-    let fz = lineGap * 2;</pre>
+    // 中格字母正好落在中格、上伸字母自然上伸、下伸字母自然下伸，不会踩线。</pre>
 </div>
 <div class="page">
   <div class="head"><span class="nm">字母拼拼小游戏软件 V1.0</span><span class="pg">第 29 页</span></div>
-  <pre>    ctx.font = fz + 'px ' + family;
+  <pre>    // 先用小写 'x' 的实际字高（x-height）校准字号，使 x-height 正好等于中格高度 lineGap。
+    const family = SPELL_FONT || 'sans-serif';
+    let fz = lineGap * 2;
+    ctx.font = fz + 'px ' + family;
     const m0 = ctx.measureText('x');
     const xh = m0.actualBoundingBoxAscent || (fz * 0.5);
     fz = fz * (lineGap / xh);                // 校准：x-height =&gt; lineGap
@@ -1559,14 +1562,14 @@ function drawSpell() {</pre>
     const cx = startX + col * cellW;
     const cy = startY + row * (size + gap);
     const x = cx - size / 2;
-    const y = cy - size / 2;
-    spellTileRects.push({ x, y, w: size, h: size, idx: i });
-    drawSpellTile(x, y, size, c.ch, c.selected, i);
-  });</pre>
+    const y = cy - size / 2;</pre>
 </div>
 <div class="page">
   <div class="head"><span class="nm">字母拼拼小游戏软件 V1.0</span><span class="pg">第 30 页</span></div>
-  <pre>  // 底部区域：听音模式显示小喇叭（点击重听）；中文转单词模式显示中文释义（替代喇叭位置）
+  <pre>    spellTileRects.push({ x, y, w: size, h: size, idx: i });
+    drawSpellTile(x, y, size, c.ch, c.selected, i);
+  });
+  // 底部区域：听音模式显示小喇叭（点击重听）；中文转单词模式显示中文释义（替代喇叭位置）
   if (spellMode === 'listen') {
     spellSpeakerBtn = { x: W / 2 - 46, y: H - 104, w: 92, h: 92 };
     drawSpeaker(spellSpeakerBtn);
@@ -1612,1190 +1615,11 @@ function startLink(chapterId) {
   const rows = LINK_GRID_ROWS;
   linkCols = cols;
   linkRows = rows;
-  linkGrid = new Array(cols * rows).fill('');
-  const occupied = new Set();
-  linkTargets = [];
-  // 目标词数量按单词长度动态决定：短词多放、长词少放。</pre>
+  linkGrid = new Array(cols * rows).fill('');</pre>
 </div>
 <div class="page">
   <div class="head"><span class="nm">字母拼拼小游戏软件 V1.0</span><span class="pg">第 31 页</span></div>
-  <pre>const G6_U2 = [
-  { en: 'pack', cn: '（把……）打包' }, { en: 'kangaroo', cn: '袋鼠' },
-  { en: 'chip', cn: '马铃薯条' }, { en: 'island', cn: '岛；岛屿' },
-  { en: 'secret', cn: '秘密的' }, { en: 'message', cn: '信息' },
-  { en: 'thousand', cn: '一千' }, { en: 'maple', cn: '枫树' },
-  { en: 'fantastic', cn: '极好的' }, { en: 'collect', cn: '收集' },
-  { en: 'arrive', cn: '到达' }, { en: 'hold', cn: '握住；抱住' },
-  { en: 'koala', cn: '树袋熊，考拉' }, { en: 'third', cn: '第三个（的）' },
-  { en: 'fourth', cn: '第四个（的）' }, { en: 'palace', cn: '王宫；宫殿' },
-  { en: 'middle', cn: '中间；中央' }, { en: 'gift', cn: '礼物' },
-  { en: 'postcard', cn: '明信片' }
-];
-const G6_U3 = [
-  { en: 'fight', cn: '打斗；斗争' }, { en: 'clean', cn: '弄干净；清洁' },
-  { en: 'usually', cn: '通常地' }, { en: 'chimp', cn: '黑猩猩' },
-  { en: 'afraid', cn: '害怕的' }, { en: 'lake', cn: '湖；湖泊' },
-  { en: 'crane', cn: '鹤' }, { en: 'strange', cn: '奇怪的' },
-  { en: 'noise', cn: '噪声' }, { en: 'flood', cn: '洪水；水灾' },
-  { en: 'village', cn: '村庄' }, { en: 'age', cn: '年龄段' },
-  { en: 'rhino', cn: '犀牛' }, { en: 'kill', cn: '杀死；弄死' },
-  { en: 'horn', cn: '（牛、羊的）角' }, { en: 'leopard', cn: '豹' },
-  { en: 'fur', cn: '毛皮' }, { en: 'kingfisher', cn: '翠鸟' },
-  { en: 'river', cn: '江；河' }, { en: 'include', cn: '将……列为一部分' },
-  { en: 'gorilla', cn: '大猩猩' }
-];
-// ⚠️ 该单元源资料仅收录 12 词，疑似不全，待对照课本 Vocabulary 页补全。
-const G6_U4 = [
-  { en: 'break', cn: '损坏；失灵' }, { en: 'ring', cn: '鸣响' },
-  { en: 'word', cn: '字；词' }, { en: 'yesterday', cn: '昨天' },
-  { en: 'spade', cn: '铲；铁锹' }, { en: 'capsule', cn: '胶囊；小容器' },
-  { en: 'schoolwork', cn: '功课；作业' }, { en: 'garden', cn: '园艺工作' },
-  { en: 'list', cn: '名单；清单' }, { en: 'date', cn: '日期；日子' },
-  { en: 'piece', cn: '一张' }, { en: 'village', cn: '乡村' }
-];
-const G6_U5 = [
-  { en: 'powerful', cn: '强烈的；有力的' }, { en: 'cover', cn: '盖；覆盖' },
-  { en: 'heavily', cn: '大量地' }, { en: 'smoke', cn: '烟' },
-  { en: 'snowstorm', cn: '雪暴；暴风雪' }, { en: 'volcanic', cn: '火山的' },
-  { en: 'eruption', cn: '爆发' }, { en: 'tsunami', cn: '海啸' },
-  { en: 'hurricane', cn: '飓风' }, { en: 'wildfire', cn: '野火' },
-  { en: 'heart', cn: '心' }, { en: 'storm', cn: '暴风雪' },
-  { en: 'helper', cn: '帮手' }, { en: 'push', cn: '推；推动' },
-  { en: 'seventeen', cn: '十七' }, { en: 'shout', cn: '大声说；喊叫' },
-  { en: 'count', cn: '计数' }, { en: 'rescue', cn: '营救；救援' },
-  { en: 'terrible', cn: '糟糕的；严重的' }, { en: 'disaster', cn: '灾难' },
-  { en: 'miracle', cn: '奇迹' }, { en: 'asleep', cn: '睡着的' },
-  { en: 'voice', cn: '说话声；声音' }, { en: 'drop', cn: '落下' },
-  { en: 'onto', cn: '到……上' }
-];
-const G6_U6 = [</pre>
-</div>
-<div class="page">
-  <div class="head"><span class="nm">字母拼拼小游戏软件 V1.0</span><span class="pg">第 32 页</span></div>
-  <pre>  { en: 'yours', cn: '你的（东西）' }, { en: 'hockey', cn: '冰球；曲棍球' },
-  { en: 'ice hockey', cn: '冰球运动' }, { en: 'dogsled', cn: '狗拉雪橇' },
-  { en: 'skate', cn: '滑冰' }, { en: 'ski', cn: '滑雪' },
-  { en: 'excitedly', cn: '兴奋地' }, { en: 'receive', cn: '收到' },
-  { en: 'second', cn: '第二（个）的' }, { en: 'gold', cn: '金色的' },
-  { en: 'medal', cn: '奖牌' }, { en: 'interview', cn: '采访' },
-  { en: 'mascot', cn: '吉祥物' }, { en: 'athlete', cn: '运动员' },
-  { en: 'meaning', cn: '意义' }, { en: 'feeder', cn: '饲料容器' },
-  { en: 'bowl', cn: '碗' }, { en: 'chopstick', cn: '筷子' },
-  { en: 'through', cn: '穿过' }, { en: 'hungry', cn: '饥饿的' },
-  { en: 'freeze', cn: '（使）结冰' }, { en: 'candle', cn: '蜡烛' },
-  { en: 'mail', cn: '邮政，邮递' }, { en: 'step', cn: '步骤' },
-  { en: 'friendship', cn: '友情，友谊' }
-];
-// ---------------------------------------------------------------- 组装
-function makeBook(title, chapters) {
-  const all = [];
-  chapters.forEach((c) =&gt; { all.push(...c.words); });
-  return { title, chapters, all: { id: 'all', name: '全部章节', words: all } };
-}
-const G4 = makeBook('四年级上册', [
-  { id: 'u1', name: 'Unit 1 · I love sports!', words: G4_U1 },
-  { id: 'u2', name: 'Unit 2 · In town', words: G4_U2 },
-  { id: 'u3', name: 'Unit 3 · Cool jobs', words: G4_U3 },
-  { id: 'u4', name: 'Unit 4 · Let\'s shop', words: G4_U4 },
-  { id: 'u5', name: 'Unit 5 · Shapes are fun', words: G4_U5 },
-  { id: 'u6', name: 'Unit 6 · Our animal friends', words: G4_U6 },
-  { id: 'plays', name: 'Plays · 剧本词汇', words: G4_PLAYS }
-]);
-const G5 = makeBook('五年级上册', [
-  { id: 'u1', name: 'Unit 1 · My school is cool.', words: G5_U1 },
-  { id: 'u2', name: 'Unit 2 · School events are fun!', words: G5_U2 },
-  { id: 'u3', name: 'Unit 3 · The ends of the earth', words: G5_U3 },
-  { id: 'u4', name: 'Unit 4 · I love the sea!', words: G5_U4 },
-  { id: 'u5', name: 'Unit 5 · Work it out!', words: G5_U5 },
-  { id: 'u6', name: 'Unit 6 · Special days', words: G5_U6 },
-  { id: 'plays', name: 'Plays · 剧本词汇', words: G5_PLAYS }
-]);
-const G6 = makeBook('六年级上册', [
-  { id: 'u1', name: 'Unit 1 · Good food, good health', words: G6_U1 },
-  { id: 'u2', name: 'Unit 2 · Let\'s travel!', words: G6_U2 },
-  { id: 'u3', name: 'Unit 3 · Call of the wild', words: G6_U3 },
-  { id: 'u4', name: 'Unit 4 · Time flies!', words: G6_U4 },
-  { id: 'u5', name: 'Unit 5 · Powerful earth', words: G6_U5 },
-  { id: 'u6', name: 'Unit 6 · Winter fun', words: G6_U6 }
-]);
-const BOOKS_456 = { g4: G4, g5: G5, g6: G6 };
-module.exports = { BOOKS_456, G4, G5, G6 };
-// ---------- data/words_b56_legacy.js ----------
-// data/words_b56_legacy.js</pre>
-</div>
-<div class="page">
-  <div class="head"><span class="nm">字母拼拼小游戏软件 V1.0</span><span class="pg">第 33 页</span></div>
-  <pre>// ⚠️⚠️ 旧版词表，未接入游戏，切勿与现行词库混用 ⚠️⚠️
-//
-// 这是「外研剑桥 Join In（2013 审定旧版，刘兆义主编）」五/六年级下册词表，
-// 与本项目其他词库（2024 国家教材委员会审核通过的新版）不是同一版教材：
-//   · 新版五上单元：My school is cool. / School events are fun! / ...
-//   · 旧版五下单元：Starter unit Join in again! / A phone call / Life in the Arctic /
-//                  Television / In town / On the beach / Adventures
-//   · 新版六上单元：Good food, good health / Let's travel! / ...
-//   · 旧版六下单元：Starter unit Join us / My cousin and I / Food and health /
-//                  Mary's diary / My heroes / I love reading / The world of my dreams
-//
-// 截至 2026-11，新版（2024 审定）五下、六下预计 2027 春启用，电子课本网
-// dzkbw.com 的 Join In 系列仅收录到「五上 2026 秋版 / 六上 2026 秋版」，
-// 五下、六下仍是旧版无年份页面（joinin5x / joinin6x）；教习网、教辅资料的
-// 五下六下词表也均为旧版内容。为避免把跟孩子课本对不上的单词教出去，
-// 本文件只作为「已找到的资料」留存，不加入 data/book_index.js，
-// 不生成发音 mp3、不出现在游戏年级选择页。
-//
-// 待 2027 春新版课本词汇表公开后，请新建 data/words_b56.js 替换本文件，
-// 再按 README 的分包流程接入 g5b / g6b。
-//
-// 数据来源：教习网英语朗读全册单词表（51jiaoxi 五下/六下）、
-//           电子课本网 dzkbw.com Join In 旧版五下/六下目录与单词表页。
-// 整理自 OCR，个别释义做了精简，专有名词大小写保留原貌。
-// ---------------------------------------------------------------- 五年级下册（旧版）
-const L_G5B_STARTER = [
-  { en: 'alphabet', cn: '字母表' }, { en: 'enjoy', cn: '享受……的乐趣' },
-  { en: 'everyone', cn: '每人，人人' }, { en: 'fun', cn: '乐趣' },
-  { en: 'head', cn: '头' }, { en: 'hey', cn: '嘿，喂' },
-  { en: 'near', cn: '接近，在附近' }, { en: 'notebook', cn: '笔记本' },
-  { en: 'school', cn: '学校；上课' }, { en: 'until', cn: '直到……为止' },
-  { en: 'ping-pong', cn: '乒乓球' }, { en: 'shake hands', cn: '握手' }
-];
-const L_G5B_U1 = [
-  { en: 'ask', cn: '问，询问' }, { en: 'before', cn: '在……之前' },
-  { en: 'call', cn: '呼叫；打电话给' }, { en: 'Easter', cn: '复活节' },
-  { en: 'ill', cn: '有病，不舒服' }, { en: 'moment', cn: '片刻，瞬间' },
-  { en: 'paint', cn: '用颜料绘画' }, { en: 'programme', cn: '节目；计划' },
-  { en: 'something', cn: '某事，某物' }, { en: 'squirrel', cn: '松鼠' },
-  { en: 'storybook', cn: '故事书' }, { en: 'website', cn: '网站，网址' },
-  { en: 'wrong', cn: '有毛病，不正常' }, { en: 'CD-ROM', cn: '只读光盘' },
-  { en: 'do shopping', cn: '购物' }, { en: 'Easter Bunny', cn: '复活节小兔子' },
-  { en: 'get', cn: '收到，得到' }, { en: 'mobile phone', cn: '移动电话，手机' },
-  { en: 'over there', cn: '在那边' }, { en: 'phone box', cn: '电话亭' },
-  { en: 'phone call', cn: '电话' }, { en: 'wait a minute', cn: '等一会儿' },
-  { en: 'work', cn: '运转，运行' }, { en: 'See you tomorrow', cn: '明天见' }
-];
-const L_G5B_U2 = [
-  { en: 'Arctic', cn: '北极的' }, { en: 'earth', cn: '地球；大地' },
-  { en: 'fishing', cn: '钓鱼，捕鱼' }, { en: 'grandad', cn: '爷爷；外公' },</pre>
-</div>
-<div class="page">
-  <div class="head"><span class="nm">字母拼拼小游戏软件 V1.0</span><span class="pg">第 34 页</span></div>
-  <pre>  { en: 'grandma', cn: '奶奶；外婆' }, { en: 'grandpa', cn: '爷爷；外公' },
-  { en: 'hare', cn: '野兔' }, { en: 'hill', cn: '小山，山丘' },
-  { en: 'ice', cn: '冰' }, { en: 'lake', cn: '湖，湖泊' },
-  { en: 'pull', cn: '拉，拖，拽' }, { en: 'seal', cn: '海豹' },
-  { en: 'snow', cn: '雪；下雪' }, { en: 'come to a stop', cn: '停止' },
-  { en: 'early', cn: '早期的，初期的' }, { en: 'go fishing', cn: '去钓鱼' },
-  { en: 'South Pole', cn: '南极' }, { en: 'will', cn: '将，会' },
-  { en: 'North Pole', cn: '北极' }, { en: 'polar bear', cn: '北极熊' },
-  { en: 'shopping mall', cn: '大型购物中心' }
-];
-const L_G5B_U3 = [
-  { en: 'detective', cn: '侦探，警探' }, { en: 'different', cn: '不同的' },
-  { en: 'interesting', cn: '有趣的' }, { en: 'nature', cn: '自然界，大自然' },
-  { en: 'only', cn: '只有，仅仅' }, { en: 'romantic', cn: '浪漫的' },
-  { en: 'television', cn: '电视机；电视节目' }, { en: 'telly', cn: '电视机（口语）' },
-  { en: 'thousand', cn: '一千' }, { en: 'true', cn: '真实的' },
-  { en: 'usually', cn: '通常地' }, { en: 'want', cn: '要，想要' },
-  { en: 'while', cn: '当……的时候；一会儿' }, { en: 'call', cn: '名叫，叫做' },
-  { en: 'Kung Fu Panda', cn: '功夫熊猫' }, { en: 'science fiction', cn: '科幻小说；科幻电影' },
-  { en: 'star', cn: '明星；高手' }, { en: 'sweet', cn: '糖果；甜点' }
-];
-const L_G5B_U4 = [
-  { en: 'ahead', cn: '向前' }, { en: 'beside', cn: '在旁边' },
-  { en: 'church', cn: '教堂' }, { en: 'hospital', cn: '医院' },
-  { en: 'late', cn: '晚，迟' }, { en: 'left', cn: '左，左边' },
-  { en: 'museum', cn: '博物馆' }, { en: 'neighbour', cn: '邻居' },
-  { en: 'next', cn: '下一个；接下来' }, { en: 'on', cn: '在……上；关于' },
-  { en: 'opposite', cn: '在……的对面' }, { en: 'past', cn: '经过，路过' },
-  { en: 'side', cn: '侧面；一方' }, { en: 'straight', cn: '直的，笔直地' },
-  { en: 'tell', cn: '告诉' }, { en: 'town', cn: '城镇，市镇' },
-  { en: 'bus stop', cn: '公共汽车站' }, { en: 'just', cn: '仅仅，只是' },
-  { en: 'next to', cn: '接近，靠近' }, { en: 'police station', cn: '警察（分）局' },
-  { en: 'post office', cn: '邮局' }, { en: 'right', cn: '右，右边' },
-  { en: 'tourist office', cn: '旅游信息咨询处' }, { en: 'train station', cn: '火车站' },
-  { en: 'excuse me', cn: '劳驾；打扰一下' }
-];
-const L_G5B_U5 = [
-  { en: 'badly', cn: '差地；严重地' }, { en: 'blood', cn: '血，血液' },
-  { en: 'boat', cn: '小船，舟' }, { en: 'call', cn: '呼叫；打电话给' },
-  { en: 'city', cn: '城市' }, { en: 'clear', cn: '清晰的；清澈的' },
-  { en: 'cloudy', cn: '阴天的，多云的' }, { en: 'island', cn: '岛' },
-  { en: 'most', cn: '大部分，大多数' }, { en: 'nearby', cn: '附近的；在附近' },
-  { en: 'rain', cn: '下雨；雨' }, { en: 'rock', cn: '岩石' },
-  { en: 'sand', cn: '沙子，沙滩' }, { en: 'snorkel', cn: '（潜水者的）呼吸管' },
-  { en: 'snorkelling', cn: '徒手潜水' }, { en: 'starfish', cn: '海星' },
-  { en: 'sun', cn: '太阳，阳光' }, { en: 'sunny', cn: '晴朗的' },
-  { en: 'too', cn: '太，过于' }, { en: 'tourist', cn: '游客，旅行者' },
-  { en: 'windy', cn: '多风的' }, { en: 'baby', cn: '幼兽' },
-  { en: "Children's Day", cn: '儿童节' }, { en: 'close', cn: '接近的；关闭' },
-  { en: 'come along', cn: '（和某人）一起去' }, { en: 'fine', cn: '晴朗的；健康的' },</pre>
-</div>
-<div class="page">
-  <div class="head"><span class="nm">字母拼拼小游戏软件 V1.0</span><span class="pg">第 35 页</span></div>
-  <pre>  { en: 'hurt', cn: '（使）疼痛；受伤' }, { en: 'jet-ski', cn: '喷气式划艇' },
-  { en: 'pass by', cn: '经过' }
-];
-const L_G5B_U6 = [
-  { en: 'adventure', cn: '冒险；冒险经历' }, { en: 'afraid', cn: '担心，害怕' },
-  { en: 'age', cn: '年龄' }, { en: 'ago', cn: '以前' },
-  { en: 'alone', cn: '单独，独自' }, { en: 'bank', cn: '银行；岸' },
-  { en: 'boot', cn: '靴子，长筒靴' }, { en: 'cactus', cn: '仙人掌' },
-  { en: 'coat', cn: '外衣，外套' }, { en: 'dark', cn: '黑暗的；深色的' },
-  { en: 'ground', cn: '地，地面' }, { en: 'hero', cn: '偶像；英雄' },
-  { en: 'pancake', cn: '薄煎饼' }, { en: 'proud', cn: '自豪的，骄傲的' },
-  { en: 'ride', cn: '骑；驾驶' }, { en: 'robber', cn: '盗贼，抢劫者' },
-  { en: 'sheriff', cn: '县治安官' }, { en: 'short', cn: '矮的；短的' },
-  { en: 'soup', cn: '汤' }, { en: 'strong', cn: '强壮的' },
-  { en: 'swimmer', cn: '游泳运动员' }, { en: 'thin', cn: '瘦的；薄的' },
-  { en: 'worry', cn: '担心，担忧' }, { en: 'be afraid of', cn: '害怕' },
-  { en: 'Cowboy hat', cn: '牛仔帽' }, { en: 'good at', cn: '擅长' },
-  { en: 'Hands up!', cn: '举起手来！' }, { en: 'horror film', cn: '恐怖片' },
-  { en: 'hot', cn: '辣的；热的' }, { en: 'last', cn: '最后；最终' },
-  { en: 'born to', cn: '天生注定' }
-];
-const L_G5B_SUPP = [
-  { en: 'build', cn: '建造，建筑' }, { en: 'butter', cn: '黄油，奶油' },
-  { en: 'childish', cn: '幼稚的' }, { en: 'daughter', cn: '女儿' },
-  { en: 'drink', cn: '喝；饮料' }, { en: 'really', cn: '真的，的确' },
-  { en: 'quite a lot', cn: '许多' }, { en: 'sand castle', cn: '沙堡' }
-];
-// ---------------------------------------------------------------- 六年级下册（旧版）
-const L_G6B_STARTER = [
-  { en: 'blink', cn: '眨（眼）' }, { en: 'boss', cn: '老板；上司' },
-  { en: 'cowboy', cn: '牛仔' }, { en: 'pilot', cn: '飞行员；驾驶员' },
-  { en: 'pm', cn: '下午' }, { en: 'pony', cn: '小马' },
-  { en: 'spacecraft', cn: '宇宙飞船，航天器' }, { en: 'supersonic', cn: '超音速的' },
-  { en: 'for now', cn: '目前，暂时' }, { en: 'really', cn: '确实，的确' }
-];
-const L_G6B_U1 = [
-  { en: 'auntie', cn: '姑妈；姨妈；婶婶' }, { en: 'Australian', cn: '澳大利亚的；澳大利亚人' },
-  { en: 'baby', cn: '婴儿；动物幼崽' }, { en: 'Canberra', cn: '堪培拉' },
-  { en: 'climb', cn: '攀爬，攀登' }, { en: 'fact', cn: '事实，真相' },
-  { en: 'friendly', cn: '友好的' }, { en: 'koala', cn: '考拉' },
-  { en: 'little', cn: '小的' }, { en: 'outgoing', cn: '外向的，开朗的' },
-  { en: 'sixth', cn: '第六' }, { en: 'tail', cn: '尾巴' },
-  { en: 'Australia Day', cn: '澳大利亚国庆节' }, { en: 'Spring Festival', cn: '春节' }
-];
-const L_G6B_U2 = [
-  { en: 'active', cn: '积极的，活跃的' }, { en: 'celery', cn: '芹菜' },
-  { en: 'cherry', cn: '樱桃' }, { en: 'glass', cn: '玻璃；玻璃杯' },
-  { en: 'habit', cn: '习惯' }, { en: 'health', cn: '健康（状况）' },
-  { en: 'healthy', cn: '健康的' }, { en: 'memory', cn: '记忆力；回忆' },
-  { en: 'own', cn: '自己的；拥有' }, { en: 'protein', cn: '蛋白质' },</pre>
-</div>
-<div class="page">
-  <div class="head"><span class="nm">字母拼拼小游戏软件 V1.0</span><span class="pg">第 36 页</span></div>
-  <pre>  { en: 'sugar', cn: '食糖，糖' }, { en: 'corn-on-the-cob', cn: '玉米棒子' },
-  { en: 'fit', cn: '健壮的，健康的' }, { en: 'kind', cn: '种类；友好的' },
-  { en: 'not...at all', cn: '一点也不' }, { en: 'stay', cn: '保持' },
-  { en: 'warm', cn: '热情的，热忱的' }, { en: 'weight', cn: '体重；重量' },
-  { en: 'look after', cn: '照顾，照料' }, { en: 'plenty of', cn: '大量的，许多' },
-  { en: 'string bean', cn: '菜豆' }, { en: 'whole grains', cn: '天然谷物' }
-];
-const L_G6B_U3 = [
-  { en: 'diary', cn: '日记；日记簿' }, { en: 'difficult', cn: '困难的' },
-  { en: 'flavour', cn: '味道，风味' }, { en: 'gentleman', cn: '先生；男士' },
-  { en: 'horrible', cn: '糟糕的，可怕的' }, { en: 'lady', cn: '女士；夫人' },
-  { en: 'rope', cn: '绳子，绳索' }, { en: 'saying', cn: '格言，谚语' },
-  { en: 'share', cn: '分享，共用' }, { en: 'show', cn: '演出，秀' },
-  { en: 'strawberry', cn: '草莓' }, { en: 'tour', cn: '参观，游览' },
-  { en: 'vanilla', cn: '香草精' }, { en: 'guide', cn: '导游，向导' }
-];
-const L_G6B_U4 = [
-  { en: 'almost', cn: '几乎，差不多' }, { en: 'around', cn: '遍及；围绕' },
-  { en: 'blind', cn: '瞎的，失明的' }, { en: 'brave', cn: '勇敢的' },
-  { en: 'camp', cn: '野营，度假' }, { en: 'college', cn: '学院；大学' },
-  { en: 'confident', cn: '自信的' }, { en: 'dead', cn: '死的' },
-  { en: 'deer', cn: '鹿' }, { en: 'die', cn: '死，死亡' },
-  { en: 'everything', cn: '每件事，一切' }, { en: 'fight', cn: '争论；打仗' },
-  { en: 'footballer', cn: '足球运动员' }, { en: 'forest', cn: '森林' },
-  { en: 'heart', cn: '心，内心；心脏' }, { en: 'king', cn: '国王，君主' },
-  { en: 'Nottingham', cn: '诺丁汉' }, { en: 'shy', cn: '害羞的' },
-  { en: 'soldier', cn: '士兵，战士' }, { en: 'wise', cn: '有智慧的' },
-  { en: 'woman', cn: '成年女子，妇女' }, { en: 'writer', cn: '作家，作者' },
-  { en: 'young', cn: '年轻的' }, { en: 'hold on', cn: '紧紧抓住' },
-  { en: 'leave', cn: '把……留在某处' }, { en: 'move', cn: '打动，使感动' },
-  { en: 'the poor', cn: '穷人' }, { en: 'hybrid rice', cn: '杂交水稻' }
-];
-const L_G6B_U5 = [
-  { en: 'bookworm', cn: '书虫，书呆子' }, { en: 'California', cn: '加利福尼亚州' },
-  { en: 'celebrate', cn: '庆祝，庆贺' }, { en: 'competition', cn: '竞赛，比赛' },
-  { en: 'heroine', cn: '女主人公' }, { en: 'hood', cn: '风帽' },
-  { en: 'joy', cn: '愉快，欢乐' }, { en: 'nonsense', cn: '胡说' },
-  { en: 'read', cn: '看；读，阅读' }, { en: 'rest', cn: '休息；其余' },
-  { en: 'shock', cn: '吃惊，震惊' }, { en: 'Spiderman', cn: '蜘蛛侠' },
-  { en: 'trick', cn: '计谋；恶作剧' }, { en: 'win', cn: '获胜，赢得' },
-  { en: 'Sherwood Forest', cn: '舍伍德森林' }
-];
-const L_G6B_U6 = [
-  { en: 'dangerous', cn: '危险的' }, { en: 'enough', cn: '足够地，充分地' },
-  { en: 'glad', cn: '高兴的，快乐的' }, { en: 'ocean', cn: '海洋' },
-  { en: 'owl', cn: '猫头鹰' }, { en: 'robot', cn: '机器人' },
-  { en: 'situation', cn: '形势，情况' }, { en: 'sure', cn: '当然；确信' },
-  { en: 'every now and then', cn: '偶尔，有时' }, { en: 'wish', cn: '愿望；祝愿' }
-];
-const L_G6B_SUPP = [</pre>
-</div>
-<div class="page">
-  <div class="head"><span class="nm">字母拼拼小游戏软件 V1.0</span><span class="pg">第 37 页</span></div>
-  <pre>  { en: 'become', cn: '开始变得，变成' }, { en: 'colourful', cn: '颜色鲜艳的' },
-  { en: 'Edinburgh', cn: '爱丁堡' }, { en: 'Glasgow', cn: '格拉斯哥' },
-  { en: 'goldfish', cn: '金鱼' }, { en: 'gun', cn: '枪，炮' },
-  { en: 'hiding', cn: '藏匿，躲藏' }, { en: 'Nessie', cn: '尼斯湖水怪' },
-  { en: 'painting', cn: '（一幅）画；绘画作品' },
-  { en: 'Dunvegan Castle', cn: '邓韦根城堡' }, { en: 'Loch Ness', cn: '尼斯湖' }
-];
-// ---------------------------------------------------------------- 组装
-function makeBook(title, chapters) {
-  const all = [];
-  chapters.forEach((c) =&gt; { all.push(...c.words); });
-  return { title, chapters, all: { id: 'all', name: '全部章节', words: all } };
-}
-const G5B_LEGACY = makeBook('五年级下册（旧版）', [
-  { id: 'starter', name: 'Starter unit · Join in again!', words: L_G5B_STARTER },
-  { id: 'u1', name: 'Unit 1 · A phone call', words: L_G5B_U1 },
-  { id: 'u2', name: 'Unit 2 · Life in the Arctic', words: L_G5B_U2 },
-  { id: 'u3', name: 'Unit 3 · Television', words: L_G5B_U3 },
-  { id: 'u4', name: 'Unit 4 · In town', words: L_G5B_U4 },
-  { id: 'u5', name: 'Unit 5 · On the beach', words: L_G5B_U5 },
-  { id: 'u6', name: 'Unit 6 · Adventures', words: L_G5B_U6 },
-  { id: 'supp', name: 'Supplementary activities', words: L_G5B_SUPP }
-]);
-const G6B_LEGACY = makeBook('六年级下册（旧版）', [
-  { id: 'starter', name: 'Starter unit · Join us', words: L_G6B_STARTER },
-  { id: 'u1', name: 'Unit 1 · My cousin and I', words: L_G6B_U1 },
-  { id: 'u2', name: 'Unit 2 · Food and health', words: L_G6B_U2 },
-  { id: 'u3', name: "Unit 3 · Mary's diary", words: L_G6B_U3 },
-  { id: 'u4', name: 'Unit 4 · My heroes', words: L_G6B_U4 },
-  { id: 'u5', name: 'Unit 5 · I love reading', words: L_G6B_U5 },
-  { id: 'u6', name: 'Unit 6 · The world of my dreams', words: L_G6B_U6 },
-  { id: 'supp', name: 'Supplementary activities', words: L_G6B_SUPP }
-]);
-const BOOKS_B56_LEGACY = { g5b: G5B_LEGACY, g6b: G6B_LEGACY };
-module.exports = { BOOKS_B56_LEGACY, G5B_LEGACY, G6B_LEGACY };
-// ---------- data/word_audio.js ----------
-// 自动生成，请勿手动修改。
-// 按年级记录已生成真实发音的音频文件名（slug）。audio.js 优先播放分包内 mp3，
-// 清单未包含或分包未加载时自动回退为逐字母拼读（announceWord）。
-module.exports = {
-  WORD_AUDIO: {
-  "g3": [
-    "about",
-    "act",
-    "afternoon",
-    "all",
-    "all_right",
-    "and",
-    "at",
-    "aunt",</pre>
-</div>
-<div class="page">
-  <div class="head"><span class="nm">字母拼拼小游戏软件 V1.0</span><span class="pg">第 38 页</span></div>
-  <pre>    "ball",
-    "be",
-    "begin",
-    "behind",
-    "beside",
-    "best",
-    "bird",
-    "birthday",
-    "black",
-    "blackboard",
-    "blue",
-    "book",
-    "brother",
-    "brown",
-    "butterfly",
-    "call",
-    "can",
-    "case",
-    "chair",
-    "children",
-    "class",
-    "classroom",
-    "clean",
-    "clever",
-    "colour",
-    "colourful",
-    "come",
-    "cousin",
-    "cut",
-    "dad",
-    "day",
-    "dear",
-    "desk",
-    "do",
-    "door",
-    "draw",
-    "duck",
-    "easy",
-    "eight",
-    "english",
-    "eraser",
-    "family",
-    "father",
-    "favourite",
-    "fine",
-    "five",
-    "floor",
-    "for",
-    "four",
-    "front",</pre>
-</div>
-<div class="page">
-  <div class="head"><span class="nm">字母拼拼小游戏软件 V1.0</span><span class="pg">第 39 页</span></div>
-  <pre>    "fun",
-    "get",
-    "go",
-    "good",
-    "good_job",
-    "goodbye",
-    "grandfather",
-    "grandma",
-    "grandmother",
-    "grandpa",
-    "great",
-    "green",
-    "guess",
-    "happy",
-    "have",
-    "he",
-    "hello",
-    "help",
-    "her",
-    "hi",
-    "him",
-    "home",
-    "how",
-    "hurry",
-    "in",
-    "it",
-    "job",
-    "join",
-    "jump",
-    "keep",
-    "kid",
-    "late",
-    "let",
-    "listen",
-    "little",
-    "long",
-    "look",
-    "love",
-    "lovely",
-    "many",
-    "me",
-    "meet",
-    "mime",
-    "morning",
-    "mother",
-    "ms",
-    "mum",
-    "my",
-    "name",
-    "necklace",</pre>
-</div>
-<div class="page">
-  <div class="head"><span class="nm">字母拼拼小游戏软件 V1.0</span><span class="pg">第 40 页</span></div>
-  <pre>    "next",
-    "nice",
-    "nine",
-    "no",
-    "now",
-    "number",
-    "of",
-    "ok",
-    "old",
-    "on",
-    "one",
-    "only",
-    "open",
-    "orange",
-    "out",
-    "over",
-    "paint",
-    "paper",
-    "pen",
-    "pencil",
-    "people",
-    "picture",
-    "pink",
-    "play",
-    "please",
-    "purple",
-    "put",
-    "rainbow",
-    "read",
-    "ready",
-    "red",
-    "right",
-    "rope",
-    "ruler",
-    "safe",
-    "school",
-    "schoolbag",
-    "see",
-    "seven",
-    "she",
-    "show",
-    "sing",
-    "sister",
-    "six",
-    "some",
-    "speak",
-    "sport",
-    "sports_day",
-    "start",
-    "sweep",</pre>
-</div>
-<div class="page">
-  <div class="head"><span class="nm">字母拼拼小游戏软件 V1.0</span><span class="pg">第 41 页</span></div>
-  <pre>    "take",
-    "tea",
-    "ten",
-    "thank",
-    "that",
-    "the",
-    "their",
-    "they",
-    "thing",
-    "think",
-    "this",
-    "three",
-    "tiger",
-    "time",
-    "to",
-    "today",
-    "tomorrow",
-    "too",
-    "two",
-    "uncle",
-    "under",
-    "up",
-    "wall",
-    "we",
-    "well",
-    "what",
-    "where",
-    "white",
-    "who",
-    "win",
-    "window",
-    "with",
-    "world",
-    "wow",
-    "write",
-    "wrong",
-    "yellow",
-    "yes",
-    "you",
-    "your"
-  ],
-  "g3b": [
-    "activity",
-    "after",
-    "again",
-    "amazing",
-    "angry",
-    "any",
-    "apple",
-    "arm",</pre>
-</div>
-<div class="page">
-  <div class="head"><span class="nm">字母拼拼小游戏软件 V1.0</span><span class="pg">第 42 页</span></div>
-  <pre>    "autumn",
-    "back",
-    "banana",
-    "basketball",
-    "beat",
-    "beautiful",
-    "before",
-    "big",
-    "bike",
-    "board",
-    "body",
-    "bookshop",
-    "boot",
-    "bread",
-    "busy",
-    "but",
-    "cake",
-    "candy",
-    "cap",
-    "carefully",
-    "cat",
-    "chess",
-    "chicken",
-    "chinese",
-    "chinese_chess",
-    "close",
-    "clothes",
-    "cloudy",
-    "club",
-    "coat",
-    "cold",
-    "cook",
-    "cooking",
-    "cool",
-    "cream",
-    "cry",
-    "dinner",
-    "dish",
-    "doll",
-    "drawing",
-    "dress",
-    "drink",
-    "dry",
-    "ear",
-    "eat",
-    "egg",
-    "eggplant",
-    "every",
-    "excited",
-    "eye",</pre>
-</div>
-<div class="page">
-  <div class="head"><span class="nm">字母拼拼小游戏软件 V1.0</span><span class="pg">第 43 页</span></div>
-  <pre>    "face",
-    "feel",
-    "feeling",
-    "find",
-    "fish",
-    "fly",
-    "food",
-    "foot",
-    "football",
-    "fox",
-    "friday",
-    "game",
-    "grape",
-    "hair",
-    "hand",
-    "hang",
-    "hat",
-    "head",
-    "here",
-    "his",
-    "hot",
-    "ice",
-    "ice_cream",
-    "idea",
-    "jeans",
-    "juice",
-    "king",
-    "kite",
-    "know",
-    "laugh",
-    "leg",
-    "like",
-    "magic",
-    "make",
-    "meat",
-    "milk",
-    "monday",
-    "monkey",
-    "month",
-    "most",
-    "mouse",
-    "mouth",
-    "mr",
-    "much",
-    "mushroom",
-    "music",
-    "need",
-    "new",
-    "noodles",
-    "nose",</pre>
-</div>
-<div class="page">
-  <div class="head"><span class="nm">字母拼拼小游戏软件 V1.0</span><span class="pg">第 44 页</span></div>
-  <pre>    "not",
-    "of_course",
-    "oil",
-    "or",
-    "parent",
-    "park",
-    "people",
-    "potato",
-    "prize",
-    "rabbit",
-    "race",
-    "rain",
-    "rainy",
-    "rice",
-    "robe",
-    "robot",
-    "rock",
-    "room",
-    "run",
-    "sad",
-    "salt",
-    "saturday",
-    "say",
-    "scared",
-    "season",
-    "sell",
-    "shake",
-    "shiny",
-    "shirt",
-    "shoe",
-    "short",
-    "shorts",
-    "skirt",
-    "sleep",
-    "small",
-    "snowball",
-    "snowy",
-    "so",
-    "sock",
-    "song",
-    "sorry",
-    "soup",
-    "spring",
-    "stamp",
-    "stand",
-    "stretch",
-    "study",
-    "summer",
-    "sun",
-    "sunday",</pre>
-</div>
-<div class="page">
-  <div class="head"><span class="nm">字母拼拼小游戏软件 V1.0</span><span class="pg">第 45 页</span></div>
-  <pre>    "sunny",
-    "sweater",
-    "swim",
-    "t-shirt",
-    "tell",
-    "them",
-    "these",
-    "throw",
-    "thursday",
-    "tired",
-    "tomato",
-    "tooth",
-    "touch",
-    "tree",
-    "trousers",
-    "truth",
-    "try",
-    "try_sth_on",
-    "tuesday",
-    "umbrella",
-    "unhappy",
-    "vegetable",
-    "wait",
-    "walk",
-    "want",
-    "warm",
-    "wash",
-    "water",
-    "wave",
-    "wear",
-    "weather",
-    "wednesday",
-    "week",
-    "welcome",
-    "wet",
-    "why",
-    "windy",
-    "winter",
-    "wonderful",
-    "worried",
-    "worry"
-  ],
-  "g4": [
-    "a_lot",
-    "address",
-    "animal",
-    "animal_shelter",
-    "another",
-    "around",
-    "ask",</pre>
-</div>
-<div class="page">
-  <div class="head"><span class="nm">字母拼拼小游戏软件 V1.0</span><span class="pg">第 46 页</span></div>
-  <pre>    "astronaut",
-    "bad",
-    "bag",
-    "bakery",
-    "band",
-    "because",
-    "bee",
-    "box",
-    "boy",
-    "brave",
-    "bus",
-    "bus_stop",
-    "buy",
-    "carrot",
-    "catch",
-    "centre",
-    "chocolate",
-    "cinema",
-    "circle",
-    "city",
-    "cleaner",
-    "climb",
-    "cow",
-    "cute",
-    "doctor",
-    "dream_job",
-    "drive",
-    "driver",
-    "early",
-    "eighteen",
-    "eighty",
-    "elephant",
-    "eleven",
-    "everyone",
-    "excuse_me",
-    "far",
-    "farm",
-    "farmer",
-    "fast",
-    "fifty",
-    "fire",
-    "firefighter",
-    "first",
-    "flea_market",
-    "flower",
-    "forty-four",
-    "forty-three",
-    "friend",
-    "from",
-    "gardener",</pre>
-</div>
-<div class="page">
-  <div class="head"><span class="nm">字母拼拼小游戏软件 V1.0</span><span class="pg">第 47 页</span></div>
-  <pre>    "gift",
-    "giraffe",
-    "girl",
-    "give",
-    "grass",
-    "grow",
-    "guy",
-    "hamster",
-    "hard",
-    "healthy",
-    "heavy",
-    "holiday",
-    "horse",
-    "hospital",
-    "house",
-    "hundred",
-    "hunter",
-    "hurt",
-    "into",
-    "its",
-    "keeper",
-    "kick",
-    "kind",
-    "knock",
-    "learn",
-    "left",
-    "life",
-    "line",
-    "lion",
-    "live",
-    "map",
-    "money",
-    "moon",
-    "near",
-    "neck",
-    "never",
-    "nineteen",
-    "noon",
-    "nurse",
-    "often",
-    "our",
-    "pair",
-    "panda",
-    "parrot",
-    "party",
-    "paw",
-    "perfect",
-    "pet",
-    "pig",
-    "ping-pong",</pre>
-</div>
-<div class="page">
-  <div class="head"><span class="nm">字母拼拼小游戏软件 V1.0</span><span class="pg">第 48 页</span></div>
-  <pre>    "place",
-    "police",
-    "police_station",
-    "policeman",
-    "prepare",
-    "question",
-    "really",
-    "rectangle",
-    "report",
-    "restaurant",
-    "ride",
-    "save",
-    "science",
-    "scientist",
-    "seventy",
-    "shape",
-    "share",
-    "sheep",
-    "shop",
-    "should",
-    "sick",
-    "sixteen",
-    "sixty-six",
-    "skateboard",
-    "skateboarding",
-    "sky",
-    "slow",
-    "snow",
-    "space",
-    "spend",
-    "square",
-    "star",
-    "station",
-    "stop",
-    "story",
-    "straight",
-    "street",
-    "strong",
-    "supermarket",
-    "sure",
-    "surprise",
-    "tail",
-    "talk",
-    "tall",
-    "taxi",
-    "teach",
-    "teacher",
-    "team",
-    "thanks",
-    "then",</pre>
-</div>
-<div class="page">
-  <div class="head"><span class="nm">字母拼拼小游戏软件 V1.0</span><span class="pg">第 49 页</span></div>
-  <pre>    "there",
-    "think",
-    "thirteen",
-    "thirty",
-    "thirty-three",
-    "tie",
-    "town",
-    "toy",
-    "train",
-    "train_station",
-    "triangle",
-    "trust",
-    "tummy",
-    "turn",
-    "twelve",
-    "twenty",
-    "us",
-    "use",
-    "very",
-    "way",
-    "wheel",
-    "wheelchair",
-    "wind",
-    "wolf",
-    "work",
-    "worker",
-    "writer",
-    "yuan",
-    "yummy",
-    "zoo",
-    "zookeeper"
-  ],
-  "g4b": [
-    "activity",
-    "all_year_round",
-    "anymore",
-    "april",
-    "art",
-    "august",
-    "baby",
-    "bag",
-    "bathroom",
-    "beach",
-    "beat_the_clock",
-    "bed",
-    "bedroom",
-    "beech",
-    "bookshelf",
-    "both",
-    "breakfast",</pre>
-</div>
-<div class="page">
-  <div class="head"><span class="nm">字母拼拼小游戏软件 V1.0</span><span class="pg">第 50 页</span></div>
-  <pre>    "car",
-    "clock",
-    "cup",
-    "dance",
-    "december",
-    "different",
-    "evening",
-    "fan",
-    "february",
-    "fifteen",
-    "follow",
-    "forest",
-    "forty-five",
-    "friendly",
-    "gift",
-    "half",
-    "half_past_eight",
-    "hill",
-    "history",
-    "hour",
-    "indeed",
-    "january",
-    "july",
-    "june",
-    "kitchen",
-    "lamp",
-    "lark",
-    "last",
-    "leave",
-    "lesson",
-    "letter",
-    "library",
-    "life",
-    "living_room",
-    "lunchtime",
-    "march",
-    "may",
-    "maybe",
-    "move",
-    "museum",
-    "nature",
-    "nature_reserve",
-    "newspaper",
-    "note",
-    "november",
-    "october",
-    "off",
-    "past",
-    "phone",
-    "photo",</pre>
-</div>
-<div class="page">
-  <div class="head"><span class="nm">字母拼拼小游戏软件 V1.0</span><span class="pg">第 51 页</span></div>
-  <pre>    "piano",
-    "plant",
-    "play_the_piano",
-    "playground",
-    "remember",
-    "reserve",
-    "rule",
-    "running",
-    "salad",
-    "september",
-    "shopping",
-    "singer",
-    "sit",
-    "snow",
-    "snowman",
-    "sofa",
-    "soon",
-    "super",
-    "swallow",
-    "table",
-    "task",
-    "the_south",
-    "tidy",
-    "time",
-    "together",
-    "trip",
-    "two_oclock",
-    "watch",
-    "when",
-    "will",
-    "year"
-  ],
-  "g5": [
-    "ago",
-    "also",
-    "always",
-    "answer",
-    "assistant",
-    "badly",
-    "bear",
-    "blood",
-    "boat",
-    "break",
-    "bring",
-    "brush",
-    "card",
-    "celebrate",
-    "celebration",
-    "choose",
-    "complete",</pre>
-</div>
-<div class="page">
-  <div class="head"><span class="nm">字母拼拼小游戏软件 V1.0</span><span class="pg">第 52 页</span></div>
-  <pre>    "computer",
-    "coral",
-    "coral_reef",
-    "could",
-    "deaf",
-    "deep",
-    "detective",
-    "diary",
-    "die",
-    "difficult",
-    "dirty",
-    "down",
-    "dragon",
-    "drama",
-    "drum",
-    "earth",
-    "end",
-    "energy",
-    "everybody",
-    "fancy",
-    "festival",
-    "firework",
-    "first",
-    "fishing",
-    "forget",
-    "fresh_water",
-    "giant",
-    "god",
-    "grandchild",
-    "guide",
-    "hear",
-    "heaven",
-    "hide",
-    "hide-and-seek",
-    "hole",
-    "igloo",
-    "instrument",
-    "interesting",
-    "jet_ski",
-    "key",
-    "knock",
-    "ladder",
-    "land",
-    "lantern",
-    "less",
-    "light",
-    "lunar",
-    "lunch",
-    "man",
-    "match",</pre>
-</div>
-<div class="page">
-  <div class="head"><span class="nm">字母拼拼小游戏软件 V1.0</span><span class="pg">第 53 页</span></div>
-  <pre>    "maths",
-    "middle",
-    "monster",
-    "mooncake",
-    "most",
-    "mountain",
-    "mrs",
-    "musical",
-    "musical_instrument",
-    "must",
-    "noisy",
+  <pre>    "noisy",
     "north",
     "northern",
     "ocean",
@@ -2834,11 +1658,8 @@ module.exports = {
     "student",
     "subject",
     "suddenly",
-    "sunshine",</pre>
-</div>
-<div class="page">
-  <div class="head"><span class="nm">字母拼拼小游戏软件 V1.0</span><span class="pg">第 54 页</span></div>
-  <pre>    "team",
+    "sunshine",
+    "team",
     "teen",
     "thief",
     "thin",
@@ -2847,8 +1668,11 @@ module.exports = {
     "turtle",
     "tv",
     "vat",
-    "visit",
-    "wake",
+    "visit",</pre>
+</div>
+<div class="page">
+  <div class="head"><span class="nm">字母拼拼小游戏软件 V1.0</span><span class="pg">第 32 页</span></div>
+  <pre>    "wake",
     "wake_up",
     "whale",
     "which",
@@ -2887,11 +1711,8 @@ module.exports = {
     "diet",
     "disaster",
     "dogsled",
-    "drop",</pre>
-</div>
-<div class="page">
-  <div class="head"><span class="nm">字母拼拼小游戏软件 V1.0</span><span class="pg">第 55 页</span></div>
-  <pre>    "eating",
+    "drop",
+    "eating",
     "eruption",
     "excitedly",
     "exercise",
@@ -2900,8 +1721,11 @@ module.exports = {
     "feeder",
     "fight",
     "flood",
-    "fourth",
-    "freeze",
+    "fourth",</pre>
+</div>
+<div class="page">
+  <div class="head"><span class="nm">字母拼拼小游戏软件 V1.0</span><span class="pg">第 33 页</span></div>
+  <pre>    "freeze",
     "friendship",
     "fur",
     "garden",
@@ -2940,11 +1764,8 @@ module.exports = {
     "message",
     "middle",
     "miracle",
-    "noise",</pre>
-</div>
-<div class="page">
-  <div class="head"><span class="nm">字母拼拼小游戏软件 V1.0</span><span class="pg">第 56 页</span></div>
-  <pre>    "normal",
+    "noise",
+    "normal",
     "onto",
     "pack",
     "palace",
@@ -2953,8 +1774,11 @@ module.exports = {
     "powerful",
     "push",
     "receive",
-    "rescue",
-    "rhino",
+    "rescue",</pre>
+</div>
+<div class="page">
+  <div class="head"><span class="nm">字母拼拼小游戏软件 V1.0</span><span class="pg">第 34 页</span></div>
+  <pre>    "rhino",
     "ring",
     "river",
     "schoolwork",
@@ -2993,16 +1817,1037 @@ module.exports = {
   ]
 }
 };
-// ---------- tools/dump_audio_words.js ----------</pre>
-</div>
-<div class="page">
-  <div class="head"><span class="nm">字母拼拼小游戏软件 V1.0</span><span class="pg">第 57 页</span></div>
-  <pre>// tools/dump_audio_words.js
+// ---------- tools/dump_audio_words.js ----------
+// tools/dump_audio_words.js
 // 供 gen_words_audio.py 调用：把四个年级需要的发音词条（slug -&gt; 原文）输出为 JSON。
 // 单一数据源为 data/*.js，避免 Python 侧再维护一份词表。
 // 用法：node tools/dump_audio_words.js &gt; words.json
 const { audioWordsAll } = require('../data/book_index');
 process.stdout.write(JSON.stringify(audioWordsAll()));
+// ---------- data/cn_audio.js ----------
+// 自动生成，请勿手动修改。
+// 按年级记录中文释义发音文件名（slug，与英文发音同名，位于 audio/cn/）。
+// 清单未包含或分包未加载时，听写模式的中文发音自动跳过，只播英文。</pre>
+</div>
+<div class="page">
+  <div class="head"><span class="nm">字母拼拼小游戏软件 V1.0</span><span class="pg">第 35 页</span></div>
+  <pre>module.exports = {
+  CN_AUDIO: {
+  "g3": [
+    "about",
+    "act",
+    "afternoon",
+    "all",
+    "all_right",
+    "and",
+    "at",
+    "aunt",
+    "ball",
+    "be",
+    "begin",
+    "behind",
+    "beside",
+    "best",
+    "bird",
+    "birthday",
+    "black",
+    "blackboard",
+    "blue",
+    "book",
+    "brother",
+    "brown",
+    "butterfly",
+    "call",
+    "can",
+    "case",
+    "chair",
+    "children",
+    "class",
+    "classroom",
+    "clean",
+    "clever",
+    "colour",
+    "colourful",
+    "come",
+    "cousin",
+    "cut",
+    "dad",
+    "day",
+    "dear",
+    "desk",
+    "do",
+    "door",
+    "draw",
+    "duck",
+    "easy",
+    "eight",</pre>
+</div>
+<div class="page">
+  <div class="head"><span class="nm">字母拼拼小游戏软件 V1.0</span><span class="pg">第 36 页</span></div>
+  <pre>    "english",
+    "eraser",
+    "family",
+    "father",
+    "favourite",
+    "fine",
+    "five",
+    "floor",
+    "for",
+    "four",
+    "front",
+    "fun",
+    "get",
+    "go",
+    "good",
+    "good_job",
+    "goodbye",
+    "grandfather",
+    "grandma",
+    "grandmother",
+    "grandpa",
+    "great",
+    "green",
+    "guess",
+    "happy",
+    "have",
+    "he",
+    "hello",
+    "help",
+    "her",
+    "hi",
+    "him",
+    "home",
+    "how",
+    "hurry",
+    "in",
+    "it",
+    "job",
+    "join",
+    "jump",
+    "keep",
+    "kid",
+    "late",
+    "let",
+    "listen",
+    "little",
+    "long",
+    "look",
+    "love",
+    "lovely",</pre>
+</div>
+<div class="page">
+  <div class="head"><span class="nm">字母拼拼小游戏软件 V1.0</span><span class="pg">第 37 页</span></div>
+  <pre>    "many",
+    "me",
+    "meet",
+    "mime",
+    "morning",
+    "mother",
+    "ms",
+    "mum",
+    "my",
+    "name",
+    "necklace",
+    "next",
+    "nice",
+    "nine",
+    "no",
+    "now",
+    "number",
+    "of",
+    "ok",
+    "old",
+    "on",
+    "one",
+    "only",
+    "open",
+    "orange",
+    "out",
+    "over",
+    "paint",
+    "paper",
+    "pen",
+    "pencil",
+    "people",
+    "picture",
+    "pink",
+    "play",
+    "please",
+    "purple",
+    "put",
+    "rainbow",
+    "read",
+    "ready",
+    "red",
+    "right",
+    "rope",
+    "ruler",
+    "safe",
+    "school",
+    "schoolbag",
+    "see",
+    "seven",</pre>
+</div>
+<div class="page">
+  <div class="head"><span class="nm">字母拼拼小游戏软件 V1.0</span><span class="pg">第 38 页</span></div>
+  <pre>    "she",
+    "show",
+    "sing",
+    "sister",
+    "six",
+    "some",
+    "speak",
+    "sport",
+    "sports_day",
+    "start",
+    "sweep",
+    "take",
+    "tea",
+    "ten",
+    "thank",
+    "that",
+    "the",
+    "their",
+    "they",
+    "thing",
+    "think",
+    "this",
+    "three",
+    "tiger",
+    "time",
+    "to",
+    "today",
+    "tomorrow",
+    "too",
+    "two",
+    "uncle",
+    "under",
+    "up",
+    "wall",
+    "we",
+    "well",
+    "what",
+    "where",
+    "white",
+    "who",
+    "win",
+    "window",
+    "with",
+    "world",
+    "wow",
+    "write",
+    "wrong",
+    "yellow",
+    "yes",
+    "you",</pre>
+</div>
+<div class="page">
+  <div class="head"><span class="nm">字母拼拼小游戏软件 V1.0</span><span class="pg">第 39 页</span></div>
+  <pre>    "your"
+  ],
+  "g3b": [
+    "activity",
+    "after",
+    "again",
+    "amazing",
+    "angry",
+    "any",
+    "apple",
+    "arm",
+    "autumn",
+    "back",
+    "banana",
+    "basketball",
+    "beat",
+    "beautiful",
+    "before",
+    "big",
+    "bike",
+    "board",
+    "body",
+    "bookshop",
+    "boot",
+    "bread",
+    "busy",
+    "but",
+    "cake",
+    "candy",
+    "cap",
+    "carefully",
+    "cat",
+    "chess",
+    "chicken",
+    "chinese",
+    "chinese_chess",
+    "close",
+    "clothes",
+    "cloudy",
+    "club",
+    "coat",
+    "cold",
+    "cook",
+    "cooking",
+    "cool",
+    "cream",
+    "cry",
+    "dinner",
+    "dish",
+    "doll",</pre>
+</div>
+<div class="page">
+  <div class="head"><span class="nm">字母拼拼小游戏软件 V1.0</span><span class="pg">第 40 页</span></div>
+  <pre>    "drawing",
+    "dress",
+    "drink",
+    "dry",
+    "ear",
+    "eat",
+    "egg",
+    "eggplant",
+    "every",
+    "excited",
+    "eye",
+    "face",
+    "feel",
+    "feeling",
+    "find",
+    "fish",
+    "fly",
+    "food",
+    "foot",
+    "football",
+    "fox",
+    "friday",
+    "game",
+    "grape",
+    "hair",
+    "hand",
+    "hang",
+    "hat",
+    "head",
+    "here",
+    "his",
+    "hot",
+    "ice",
+    "ice_cream",
+    "idea",
+    "jeans",
+    "juice",
+    "king",
+    "kite",
+    "know",
+    "laugh",
+    "leg",
+    "like",
+    "magic",
+    "make",
+    "meat",
+    "milk",
+    "monday",
+    "monkey",
+    "month",</pre>
+</div>
+<div class="page">
+  <div class="head"><span class="nm">字母拼拼小游戏软件 V1.0</span><span class="pg">第 41 页</span></div>
+  <pre>    "most",
+    "mouse",
+    "mouth",
+    "mr",
+    "much",
+    "mushroom",
+    "music",
+    "need",
+    "new",
+    "noodles",
+    "nose",
+    "not",
+    "of_course",
+    "oil",
+    "or",
+    "parent",
+    "park",
+    "people",
+    "potato",
+    "prize",
+    "rabbit",
+    "race",
+    "rain",
+    "rainy",
+    "rice",
+    "robe",
+    "robot",
+    "rock",
+    "room",
+    "run",
+    "sad",
+    "salt",
+    "saturday",
+    "say",
+    "scared",
+    "season",
+    "sell",
+    "shake",
+    "shiny",
+    "shirt",
+    "shoe",
+    "short",
+    "shorts",
+    "skirt",
+    "sleep",
+    "small",
+    "snowball",
+    "snowy",
+    "so",
+    "sock",</pre>
+</div>
+<div class="page">
+  <div class="head"><span class="nm">字母拼拼小游戏软件 V1.0</span><span class="pg">第 42 页</span></div>
+  <pre>    "song",
+    "sorry",
+    "soup",
+    "spring",
+    "stamp",
+    "stand",
+    "stretch",
+    "study",
+    "summer",
+    "sun",
+    "sunday",
+    "sunny",
+    "sweater",
+    "swim",
+    "t-shirt",
+    "tell",
+    "them",
+    "these",
+    "throw",
+    "thursday",
+    "tired",
+    "tomato",
+    "tooth",
+    "touch",
+    "tree",
+    "trousers",
+    "truth",
+    "try",
+    "try_sth_on",
+    "tuesday",
+    "umbrella",
+    "unhappy",
+    "vegetable",
+    "wait",
+    "walk",
+    "want",
+    "warm",
+    "wash",
+    "water",
+    "wave",
+    "wear",
+    "weather",
+    "wednesday",
+    "week",
+    "welcome",
+    "wet",
+    "why",
+    "windy",
+    "winter",
+    "wonderful",</pre>
+</div>
+<div class="page">
+  <div class="head"><span class="nm">字母拼拼小游戏软件 V1.0</span><span class="pg">第 43 页</span></div>
+  <pre>    "worried",
+    "worry"
+  ],
+  "g4": [
+    "a_lot",
+    "address",
+    "animal",
+    "animal_shelter",
+    "another",
+    "around",
+    "ask",
+    "astronaut",
+    "bad",
+    "bag",
+    "bakery",
+    "band",
+    "because",
+    "bee",
+    "box",
+    "boy",
+    "brave",
+    "bus",
+    "bus_stop",
+    "buy",
+    "carrot",
+    "catch",
+    "centre",
+    "chocolate",
+    "cinema",
+    "circle",
+    "city",
+    "cleaner",
+    "climb",
+    "cow",
+    "cute",
+    "doctor",
+    "dream_job",
+    "drive",
+    "driver",
+    "early",
+    "eighteen",
+    "eighty",
+    "elephant",
+    "eleven",
+    "everyone",
+    "excuse_me",
+    "far",
+    "farm",
+    "farmer",
+    "fast",</pre>
+</div>
+<div class="page">
+  <div class="head"><span class="nm">字母拼拼小游戏软件 V1.0</span><span class="pg">第 44 页</span></div>
+  <pre>    "fifty",
+    "fire",
+    "firefighter",
+    "first",
+    "flea_market",
+    "flower",
+    "forty-four",
+    "forty-three",
+    "friend",
+    "from",
+    "gardener",
+    "gift",
+    "giraffe",
+    "girl",
+    "give",
+    "grass",
+    "grow",
+    "guy",
+    "hamster",
+    "hard",
+    "healthy",
+    "heavy",
+    "holiday",
+    "horse",
+    "hospital",
+    "house",
+    "hundred",
+    "hunter",
+    "hurt",
+    "into",
+    "its",
+    "keeper",
+    "kick",
+    "kind",
+    "knock",
+    "learn",
+    "left",
+    "life",
+    "line",
+    "lion",
+    "live",
+    "map",
+    "money",
+    "moon",
+    "near",
+    "neck",
+    "never",
+    "nineteen",
+    "noon",
+    "nurse",</pre>
+</div>
+<div class="page">
+  <div class="head"><span class="nm">字母拼拼小游戏软件 V1.0</span><span class="pg">第 45 页</span></div>
+  <pre>    "often",
+    "our",
+    "pair",
+    "panda",
+    "parrot",
+    "party",
+    "paw",
+    "perfect",
+    "pet",
+    "pig",
+    "ping-pong",
+    "place",
+    "police",
+    "police_station",
+    "policeman",
+    "prepare",
+    "question",
+    "really",
+    "rectangle",
+    "report",
+    "restaurant",
+    "ride",
+    "save",
+    "science",
+    "scientist",
+    "seventy",
+    "shape",
+    "share",
+    "sheep",
+    "shop",
+    "should",
+    "sick",
+    "sixteen",
+    "sixty-six",
+    "skateboard",
+    "skateboarding",
+    "sky",
+    "slow",
+    "snow",
+    "space",
+    "spend",
+    "square",
+    "star",
+    "station",
+    "stop",
+    "story",
+    "straight",
+    "street",
+    "strong",
+    "supermarket",</pre>
+</div>
+<div class="page">
+  <div class="head"><span class="nm">字母拼拼小游戏软件 V1.0</span><span class="pg">第 46 页</span></div>
+  <pre>    "sure",
+    "surprise",
+    "tail",
+    "talk",
+    "tall",
+    "taxi",
+    "teach",
+    "teacher",
+    "team",
+    "thanks",
+    "then",
+    "there",
+    "think",
+    "thirteen",
+    "thirty",
+    "thirty-three",
+    "tie",
+    "town",
+    "toy",
+    "train",
+    "train_station",
+    "triangle",
+    "trust",
+    "tummy",
+    "turn",
+    "twelve",
+    "twenty",
+    "us",
+    "use",
+    "very",
+    "way",
+    "wheel",
+    "wheelchair",
+    "wind",
+    "wolf",
+    "work",
+    "worker",
+    "writer",
+    "yuan",
+    "yummy",
+    "zoo",
+    "zookeeper"
+  ],
+  "g4b": [
+    "activity",
+    "all_year_round",
+    "anymore",
+    "april",
+    "art",
+    "august",</pre>
+</div>
+<div class="page">
+  <div class="head"><span class="nm">字母拼拼小游戏软件 V1.0</span><span class="pg">第 47 页</span></div>
+  <pre>    "baby",
+    "bag",
+    "bathroom",
+    "beach",
+    "beat_the_clock",
+    "bed",
+    "bedroom",
+    "beech",
+    "bookshelf",
+    "both",
+    "breakfast",
+    "car",
+    "clock",
+    "cup",
+    "dance",
+    "december",
+    "different",
+    "evening",
+    "fan",
+    "february",
+    "fifteen",
+    "follow",
+    "forest",
+    "forty-five",
+    "friendly",
+    "gift",
+    "half",
+    "half_past_eight",
+    "hill",
+    "history",
+    "hour",
+    "indeed",
+    "january",
+    "july",
+    "june",
+    "kitchen",
+    "lamp",
+    "lark",
+    "last",
+    "leave",
+    "lesson",
+    "letter",
+    "library",
+    "life",
+    "living_room",
+    "lunchtime",
+    "march",
+    "may",
+    "maybe",
+    "move",</pre>
+</div>
+<div class="page">
+  <div class="head"><span class="nm">字母拼拼小游戏软件 V1.0</span><span class="pg">第 48 页</span></div>
+  <pre>    "museum",
+    "nature",
+    "nature_reserve",
+    "newspaper",
+    "note",
+    "november",
+    "october",
+    "off",
+    "past",
+    "phone",
+    "photo",
+    "piano",
+    "plant",
+    "play_the_piano",
+    "playground",
+    "remember",
+    "reserve",
+    "rule",
+    "running",
+    "salad",
+    "september",
+    "shopping",
+    "singer",
+    "sit",
+    "snow",
+    "snowman",
+    "sofa",
+    "soon",
+    "super",
+    "swallow",
+    "table",
+    "task",
+    "the_south",
+    "tidy",
+    "time",
+    "together",
+    "trip",
+    "two_oclock",
+    "watch",
+    "when",
+    "will",
+    "year"
+  ],
+  "g5": [
+    "ago",
+    "also",
+    "always",
+    "answer",
+    "assistant",
+    "badly",</pre>
+</div>
+<div class="page">
+  <div class="head"><span class="nm">字母拼拼小游戏软件 V1.0</span><span class="pg">第 49 页</span></div>
+  <pre>    "bear",
+    "blood",
+    "boat",
+    "break",
+    "bring",
+    "brush",
+    "card",
+    "celebrate",
+    "celebration",
+    "choose",
+    "complete",
+    "computer",
+    "coral",
+    "coral_reef",
+    "could",
+    "deaf",
+    "deep",
+    "detective",
+    "diary",
+    "die",
+    "difficult",
+    "dirty",
+    "down",
+    "dragon",
+    "drama",
+    "drum",
+    "earth",
+    "end",
+    "energy",
+    "everybody",
+    "fancy",
+    "festival",
+    "firework",
+    "first",
+    "fishing",
+    "forget",
+    "fresh_water",
+    "giant",
+    "god",
+    "grandchild",
+    "guide",
+    "hear",
+    "heaven",
+    "hide",
+    "hide-and-seek",
+    "hole",
+    "igloo",
+    "instrument",
+    "interesting",
+    "jet_ski",</pre>
+</div>
+<div class="page">
+  <div class="head"><span class="nm">字母拼拼小游戏软件 V1.0</span><span class="pg">第 50 页</span></div>
+  <pre>    "key",
+    "knock",
+    "ladder",
+    "land",
+    "lantern",
+    "less",
+    "light",
+    "lunar",
+    "lunch",
+    "man",
+    "match",
+    "maths",
+    "middle",
+    "monster",
+    "mooncake",
+    "most",
+    "mountain",
+    "mrs",
+    "musical",
+    "musical_instrument",
+    "must",
+    "noisy",
+    "north",
+    "northern",
+    "ocean",
+    "on_top_of_the_world",
+    "other",
+    "outside",
+    "painting",
+    "party",
+    "pe",
+    "penguin",
+    "plan",
+    "plastic",
+    "play",
+    "polar",
+    "polar_bear",
+    "poster",
+    "problem",
+    "push",
+    "real",
+    "reef",
+    "reuse",
+    "rubbish",
+    "sand",
+    "sea",
+    "seal",
+    "sentence",
+    "shell",
+    "shine",</pre>
+</div>
+<div class="page">
+  <div class="head"><span class="nm">字母拼拼小游戏软件 V1.0</span><span class="pg">第 51 页</span></div>
+  <pre>    "skin",
+    "smile",
+    "snorkelling",
+    "something",
+    "stone",
+    "story",
+    "storyteller",
+    "student",
+    "subject",
+    "suddenly",
+    "sunshine",
+    "team",
+    "teen",
+    "thief",
+    "thin",
+    "toilet",
+    "torch",
+    "turtle",
+    "tv",
+    "vat",
+    "visit",
+    "wake",
+    "wake_up",
+    "whale",
+    "which",
+    "whose",
+    "wife",
+    "wish",
+    "woman",
+    "writing"
+  ],
+  "g6": [
+    "afraid",
+    "age",
+    "arrive",
+    "asleep",
+    "athlete",
+    "auntie",
+    "bean",
+    "biscuit",
+    "blueberry",
+    "bowl",
+    "break",
+    "candle",
+    "capsule",
+    "chimp",
+    "chip",
+    "chopstick",
+    "clean",
+    "cola",</pre>
+</div>
+<div class="page">
+  <div class="head"><span class="nm">字母拼拼小游戏软件 V1.0</span><span class="pg">第 52 页</span></div>
+  <pre>    "collect",
+    "couch",
+    "couch_potato",
+    "count",
+    "cover",
+    "crane",
+    "date",
+    "diet",
+    "disaster",
+    "dogsled",
+    "drop",
+    "eating",
+    "eruption",
+    "excitedly",
+    "exercise",
+    "fantastic",
+    "fat",
+    "feeder",
+    "fight",
+    "flood",
+    "fourth",
+    "freeze",
+    "friendship",
+    "fur",
+    "garden",
+    "gift",
+    "gold",
+    "gorilla",
+    "habit",
+    "hamburger",
+    "health",
+    "healthy",
+    "heart",
+    "heavily",
+    "helper",
+    "hockey",
+    "hold",
+    "horn",
+    "hungry",
+    "hurricane",
+    "ice_hockey",
+    "include",
+    "interview",
+    "island",
+    "kangaroo",
+    "kcal",
+    "kill",
+    "kingfisher",
+    "koala",
+    "lake",</pre>
+</div>
+<div class="page">
+  <div class="head"><span class="nm">字母拼拼小游戏软件 V1.0</span><span class="pg">第 53 页</span></div>
+  <pre>    "leopard",
+    "list",
+    "mail",
+    "maple",
+    "mascot",
+    "meaning",
+    "medal",
+    "message",
+    "middle",
+    "miracle",
+    "noise",
+    "normal",
+    "onto",
+    "pack",
+    "palace",
+    "piece",
+    "postcard",
+    "powerful",
+    "push",
+    "receive",
+    "rescue",
+    "rhino",
+    "ring",
+    "river",
+    "schoolwork",
+    "second",
+    "secret",
+    "seventeen",
+    "shout",
+    "skate",
+    "ski",
+    "smoke",
+    "snowstorm",
+    "spade",
+    "step",
+    "stomach",
+    "storm",
+    "strange",
+    "sugar",
+    "sugary",
+    "sweet",
+    "terrible",
+    "third",
+    "thousand",
+    "through",
+    "tofu",
+    "tsunami",
+    "unhealthy",
+    "usually",
+    "village",</pre>
+</div>
+<div class="page">
+  <div class="head"><span class="nm">字母拼拼小游戏软件 V1.0</span><span class="pg">第 54 页</span></div>
+  <pre>    "voice",
+    "volcanic",
+    "wildfire",
+    "word",
+    "yesterday",
+    "yoghurt",
+    "yours"
+  ]
+}
+};
 // ---------- subpackages/g3/game.js ----------
 // g3 分包入口：本分包仅承载三上单词发音 mp3，无逻辑代码。
 // 各端 game.json 的分包 root 指向本目录；分包加载后由主包按绝对路径播放音频。
@@ -3018,12 +2863,88 @@ process.stdout.write(JSON.stringify(audioWordsAll()));
 // g5 分包入口：本分包仅承载五上单词发音 mp3，无逻辑代码。
 // ---------- subpackages/g6/game.js ----------
 // g6 分包入口：本分包仅承载六上单词发音 mp3，无逻辑代码。
+// ---------- tools/check_dictation.js ----------
+// Copyright (c) 2026 zhangyongpo. SPDX-License-Identifier: Apache-2.0
+// 本文件为 letterdrop-wx 项目独立开发源码；许可证见 LICENSE，第三方资产声明见 NOTICE.md。
+// tools/check_dictation.js —— 单词听写纯逻辑自检（Node 下运行，不进小游戏代码包）。
+// 校验：四种发音模式、非法模式回退、循环翻词边界、间隔档位、中文清单与英文清单一一对齐。
+const assert = require('assert');
+const { buildDictParts, wrapIndex, DICT_MODES } = require('../utils/dictation');
+const {
+  DICT_INTERVALS, DICT_DEFAULT_INTERVAL_IDX, DICT_GAP_MS, DICT_DEFAULT_MODE
+} = require('../config/gameConfig');
+const { WORD_AUDIO } = require('../data/word_audio');
+const { CN_AUDIO } = require('../data/cn_audio');
+let checks = 0;
+function ok(cond, msg) { assert.ok(cond, msg); checks++; }
+// 1) 四种模式的发音内容与顺序
+ok(DICT_MODES.length === 4, '应有 4 种发音模式');
+const modes = {
+  cn: [{ type: 'cn' }, { type: 'en' }],
+  en: [{ type: 'en' }],
+  both: [{ type: 'en' }, { type: 'cn' }],
+  cnOnly: [{ type: 'cn' }]
+};
+for (const m of DICT_MODES) {
+  const parts = buildDictParts(m, 'apple');
+  ok(parts.length === modes[m].length, m + ' 片段数不符');</pre>
+</div>
+<div class="page">
+  <div class="head"><span class="nm">字母拼拼小游戏软件 V1.0</span><span class="pg">第 55 页</span></div>
+  <pre>  ok(parts.every((p, i) =&gt; p.type === modes[m][i].type), m + ' 发音顺序不符');
+  ok(parts.every((p) =&gt; p.en === 'apple'), m + ' 词条未透传');
+}
+// 「只中文」模式：单个中文片段，且绝不含英文片段
+const cnOnlyParts = buildDictParts('cnOnly', 'apple');
+ok(cnOnlyParts.length === 1 &amp;&amp; cnOnlyParts[0].type === 'cn', '只中文模式应为单个中文片段');
+ok(!cnOnlyParts.some((p) =&gt; p.type === 'en'), '只中文模式不应含英文发音');
+ok(JSON.stringify(buildDictParts('bogus', 'x')) === JSON.stringify(buildDictParts('cn', 'x')),
+  '非法模式应回退为 cn');
+ok(DICT_DEFAULT_MODE === 'cn' || DICT_MODES.indexOf(DICT_DEFAULT_MODE) &gt;= 0, '默认模式非法');
+ok(DICT_GAP_MS &gt;= 200 &amp;&amp; DICT_GAP_MS &lt;= 2000, '片段间隔不合理');
+// 2) 循环翻词边界
+ok(wrapIndex(0, -1, 5) === 4, '首个词的上一个应到末尾');
+ok(wrapIndex(4, 1, 5) === 0, '末尾词的下一个应回到开头');
+ok(wrapIndex(2, 0, 5) === 2, 'delta=0 应原地');
+ok(wrapIndex(0, -7, 5) === 3, '负向多次回绕错误');
+ok(wrapIndex(4, 7, 5) === 1, '正向多次回绕错误');
+ok(wrapIndex(0, -1, 1) === 0 &amp;&amp; wrapIndex(0, 1, 1) === 0, '单条词应恒为 0');
+ok(wrapIndex(0, -1, 0) === 0, '空词表应安全返回 0');
+// 3) 间隔档位
+ok(JSON.stringify(DICT_INTERVALS) === '[5000,10000,15000,30000]', '间隔档位应为 5/10/15/30 秒');
+ok(DICT_INTERVALS.every((v, i) =&gt; i === 0 || v &gt; DICT_INTERVALS[i - 1]), '间隔应升序');
+ok(DICT_DEFAULT_INTERVAL_IDX &gt;= 0 &amp;&amp; DICT_DEFAULT_INTERVAL_IDX &lt; DICT_INTERVALS.length,
+  '默认间隔下标越界');
+// 4) 中文清单与英文清单一一对齐（若中文音频尚未生成，清单为空则跳过并明确提示）
+const grades = Object.keys(WORD_AUDIO);
+let cnTotal = 0, missing = 0, firstMiss = [];
+for (const g of grades) {
+  const en = WORD_AUDIO[g] || [];
+  const cn = CN_AUDIO[g] || [];
+  cnTotal += cn.length;
+  const cnSet = new Set(cn);
+  for (const slug of en) if (!cnSet.has(slug)) {
+    missing++;
+    if (firstMiss.length &lt; 5) firstMiss.push(g + '/' + slug);
+  }
+}
+if (cnTotal === 0) {
+  console.log('中文清单为空（音频尚未生成），跳过对齐校验；听写将只播英文。');
+} else {
+  ok(missing === 0, '中文音频清单缺失 ' + missing + ' 条，例：' + firstMiss.join(', '));
+  console.log('中文清单与英文清单一一对齐：' + cnTotal + ' 条，缺失 0');
+}
+console.log('检查项        : ' + checks);
+console.log('DICTATION_OK');
 // ---------- tools/check_link.js ----------
 // Copyright (c) 2026 zhangyongpo. SPDX-License-Identifier: Apache-2.0
 // tools/check_link.js —— 字母连连算法自检（Node 下运行，不进小游戏代码包）
 // 用法：node tools/check_link.js
-// 校验两部分：
-//   1) 路径：四邻接、不越界、不自交、不与已放置词冲突、最多一次转弯、可按路径回读出单词；
+// 校验两部分：</pre>
+</div>
+<div class="page">
+  <div class="head"><span class="nm">字母拼拼小游戏软件 V1.0</span><span class="pg">第 56 页</span></div>
+  <pre>//   1) 路径：四邻接、不越界、不自交、不与已放置词冲突、最多一次转弯、可按路径回读出单词；
 //   2) 动态选词：按单词长度决定每局词数，短词多放、长词少放，数量与占格均落在预期区间。
 const { buildPath, isValidPath } = require('../utils/link');
 const COLS = 6;              // 与 config/gameConfig.js 的 LINK_GRID_COLS 保持一致
@@ -3046,11 +2967,8 @@ let bent = 0;                // 带一次转弯路径数
 const stats = MODES.map(() =&gt; ({ rounds: 0, words: 0, cells: 0, minWords: Infinity, maxWords: 0 }));
 function dirChanges(cells) {
   let n = 0;
-  for (let j = 2; j &lt; cells.length; j++) {</pre>
-</div>
-<div class="page">
-  <div class="head"><span class="nm">字母拼拼小游戏软件 V1.0</span><span class="pg">第 58 页</span></div>
-  <pre>    const a = cells[j - 2], b = cells[j - 1], c = cells[j];
+  for (let j = 2; j &lt; cells.length; j++) {
+    const a = cells[j - 2], b = cells[j - 1], c = cells[j];
     const d1 = [Math.floor(b / COLS) - Math.floor(a / COLS), (b % COLS) - (a % COLS)];
     const d2 = [Math.floor(c / COLS) - Math.floor(b / COLS), (c % COLS) - (b % COLS)];
     if (d1[0] !== d2[0] || d1[1] !== d2[1]) n++;
@@ -3075,8 +2993,11 @@ for (let round = 0; round &lt; ROUNDS; round++) {
     if (!isValidPath(cells, COLS, ROWS)) { failures++; console.error('非法路径', cells); break; }
     if (cells.some((i) =&gt; occupied.has(i))) { failures++; console.error('与已占位冲突', cells); break; }
     const changes = dirChanges(cells);
-    if (changes &gt; 1) { failures++; console.error('转弯超过一次', cells); break; }
-    if (changes === 1) bent++; else straight++;
+    if (changes &gt; 1) { failures++; console.error('转弯超过一次', cells); break; }</pre>
+</div>
+<div class="page">
+  <div class="head"><span class="nm">字母拼拼小游戏软件 V1.0</span><span class="pg">第 57 页</span></div>
+  <pre>    if (changes === 1) bent++; else straight++;
     let word = '';
     for (let j = 0; j &lt; len; j++) word += LETTERS[Math.floor(Math.random() * LETTERS.length)];
     cells.forEach((idx, j) =&gt; { grid[idx] = word[j]; occupied.add(idx); });
@@ -3099,11 +3020,8 @@ for (let round = 0; round &lt; ROUNDS; round++) {
   s.maxWords = Math.max(s.maxWords, targets.length);
 }
 // isValidPath 应能拒绝明显非法输入（含跨行折返）
-const bad = [</pre>
-</div>
-<div class="page">
-  <div class="head"><span class="nm">字母拼拼小游戏软件 V1.0</span><span class="pg">第 59 页</span></div>
-  <pre>  [0, 2],            // 不相邻
+const bad = [
+  [0, 2],            // 不相邻
   [0, 0],            // 重复
   [COLS - 1, COLS],  // 行尾到下一行行首：视觉相邻但曼哈顿距离不是 1
   [-1],              // 越界
@@ -3128,13 +3046,81 @@ if (bent === 0 || straight === 0) { console.error('路径形态不全（应同�
 if (stats[0].words / stats[0].rounds &lt;= stats[2].words / stats[2].rounds) {
   console.error('动态选词未生效：短词章节词数未多于长词章节'); failures++;
 }
-console.log(failures === 0 ? 'LINK_ALGO_OK' : 'LINK_ALGO_FAILED');
-process.exit(failures === 0 ? 0 : 1);
+console.log(failures === 0 ? 'LINK_ALGO_OK' : 'LINK_ALGO_FAILED');</pre>
+</div>
+<div class="page">
+  <div class="head"><span class="nm">字母拼拼小游戏软件 V1.0</span><span class="pg">第 58 页</span></div>
+  <pre>process.exit(failures === 0 ? 0 : 1);
+// ---------- tools/dump_cn_audio_words.js ----------
+// Copyright (c) 2026 zhangyongpo. SPDX-License-Identifier: Apache-2.0
+// 本文件为 letterdrop-wx 项目独立开发源码；许可证见 LICENSE，第三方资产声明见 NOTICE.md。
+// tools/dump_cn_audio_words.js
+// 供 gen_cn_audio.py 调用：按年级输出 {slug: 中文 TTS 文本}，与英文发音清单一一对应。
+// 数据源仍是 data/*.js（单一数据源），按 slug 去重后与 tools/dump_audio_words.js 的键集合一致。
+// 用法：node tools/dump_cn_audio_words.js &gt; cn_words.json
+const { BOOKS, GRADES, slug } = require('../data/book_index');
+// 中文释义含括号补充、分号、省略号等，直接交给 TTS 会读成「括号」「分号」或长时间停顿。
+// 这里只清洗用于「朗读」的文本，屏幕上显示的释义仍用词表原文，不受影响。
+function ttsText(cn) {
+  let s = String(cn || '').trim();
+  s = s.replace(/[（(][^）)]*[）)]/g, '');        // 去掉括号及其补充说明
+  s = s.replace(/[;；/]/g, '，');
+  s = s.replace(/[、,]/g, '，');
+  s = s.replace(/[…．.]{2,}/g, '，');
+  s = s.replace(/[：:]/g, '，');
+  s = s.replace(/\s+/g, ' ').replace(/^[，\s]+|[，\s]+$/g, '');
+  return s || String(cn || '').trim();            // 极端情况回退原文
+}
+const out = {};
+GRADES.forEach((g) =&gt; {
+  const map = {};
+  const book = BOOKS[g.id];
+  if (book) {
+    book.chapters.forEach((ch) =&gt; {
+      ch.words.forEach((w) =&gt; {
+        const key = slug(w.en);
+        if (key &amp;&amp; !(key in map)) map[key] = ttsText(w.cn);
+      });
+    });
+  }
+  out[g.id] = map;
+});
+process.stdout.write(JSON.stringify(out));
+// ---------- utils/dictation.js ----------
+// Copyright (c) 2026 zhangyongpo. SPDX-License-Identifier: Apache-2.0
+// 本文件为 letterdrop-wx 项目独立开发源码；许可证见 LICENSE，第三方资产声明见 NOTICE.md。
+// utils/dictation.js —— 单词听写的纯逻辑（不依赖平台 API，可在 Node 下单独自检）。
+// 只负责「四种发音模式」与「循环翻词下标」，player 侧按返回的 parts 逐段播放即可。
+// 发音模式：
+//   cn     —— 先读中文释义，再读英文单词（看着中文听、最后揭晓读音）
+//   en     —— 只念英文单词（看中文想拼写，最贴近课堂听写）
+//   both   —— 先念英文单词，再读中文释义（先听后对答案）
+//   cnOnly —— 只念中文释义（屏幕已给出中文，仅作听音巩固，不读英文）
+const DICT_MODES = ['cn', 'en', 'both', 'cnOnly'];
+// 构造发音序列。parts: [{type:'cn'|'en', en:'词条英文'}]，中文片段按同 slug 查 audio/cn/。
+// 未知 mode 一律回退为 'cn'，保证任何情况下都有声音。
+function buildDictParts(mode, en) {</pre>
+</div>
+<div class="page">
+  <div class="head"><span class="nm">字母拼拼小游戏软件 V1.0</span><span class="pg">第 59 页</span></div>
+  <pre>  const word = String(en || '');
+  if (mode === 'en') return [{ type: 'en', en: word }];
+  if (mode === 'cnOnly') return [{ type: 'cn', en: word }];
+  if (mode === 'both') return [{ type: 'en', en: word }, { type: 'cn', en: word }];
+  return [{ type: 'cn', en: word }, { type: 'en', en: word }]; // 'cn' 及非法值
+}
+// 循环翻词：delta=1 下一个、-1 上一个、0 原地；到头/到尾回绕。
+// n=0 时返回 0，调用方据此判定空词表并跳过播放。
+function wrapIndex(index, delta, n) {
+  if (!n || n &lt;= 0) return 0;
+  return ((((Number(index) || 0) + (Number(delta) || 0)) % n) + n) % n;
+}
+module.exports = { DICT_MODES, buildDictParts, wrapIndex };
 // ---------- utils/link.js ----------
 // Copyright (c) 2026 zhangyongpo. SPDX-License-Identifier: Apache-2.0
 // 本文件为 letterdrop-wx 项目独立开发源码；许可证见 LICENSE，第三方资产声明见 NOTICE.md。
 // utils/link.js —— 字母连连的纯算法：为单词在网格内生成字母路径
-// 不依赖 wx / tt / Canvas 等平台 API，可单独在 Node 下运行与测试。
+// 不依赖 wx / Canvas 等平台 API，可单独在 Node 下运行与测试。
 // 网格为 rows 行 × cols 列（竖屏下行多于列），格子下标 idx = r * cols + c。
 const DIRS = [[0, 1], [0, -1], [1, 0], [-1, 0]]; // 右 / 左 / 下 / 上
 // 生成一条四邻接、不自交、不与已占用格冲突的路径；最多一次转弯（L 形）。
@@ -3152,11 +3138,8 @@ function buildPath(cols, rows, len, occupied, rand) {
     let d1 = d0;
     if (turnAt &lt; len) {
       const perp = Math.abs(d0[0]) &gt; 0 ? [[0, 1], [0, -1]] : [[1, 0], [-1, 0]];
-      d1 = perp[Math.floor(R() * perp.length)];</pre>
-</div>
-<div class="page">
-  <div class="head"><span class="nm">字母拼拼小游戏软件 V1.0</span><span class="pg">第 60 页</span></div>
-  <pre>    }
+      d1 = perp[Math.floor(R() * perp.length)];
+    }
     const cells = [];
     const used = new Set();
     let ok = true;
@@ -3169,8 +3152,11 @@ function buildPath(cols, rows, len, occupied, rand) {
       if (k &lt; len - 1) {
         const d = (k + 1 &lt; turnAt) ? d0 : d1;
         r += d[0]; c += d[1];
-      }
-    }
+      }</pre>
+</div>
+<div class="page">
+  <div class="head"><span class="nm">字母拼拼小游戏软件 V1.0</span><span class="pg">第 60 页</span></div>
+  <pre>    }
     if (ok &amp;&amp; cells.length === len) return cells;
   }
   return null;

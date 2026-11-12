@@ -1,34 +1,27 @@
 // scripts/build.js
-// 按平台组装产物：共享源码（唯一真源）+ 对应平台配置 -> dist/<platform>/
+// 组装微信小游戏产物：共享源码（唯一真源）+ 仓库根目录配置 -> dist/wx/
 //
-//   node scripts/build.js                    构建两端
-//   node scripts/build.js --platform tt     只构建抖音端
-//   node scripts/build.js --platform wx     只构建微信端
+//   node scripts/build.js
 //
-// 微信端配置直接取仓库根目录的 game.json / project.config.json，
-// 抖音端配置取 platform/tt/ 下的两份；共享源码始终只维护一份。
+// 配置直接取仓库根目录的 game.json / project.config.json；源码始终只维护一份。
 // dist/ 不入库，见 .gitignore。
 
 const fs = require('fs');
 const path = require('path');
 
 const ROOT = path.resolve(__dirname, '..');
-const DIST = path.join(ROOT, 'dist');
-const PLATFORMS = ['wx', 'tt'];
+const OUT = path.join(ROOT, 'dist', 'wx');
 
-// 打进两端产物的共享内容。platform/tt/ 只放配置，不打进产物。
+// 打进产物的共享内容。
 const SHARED = [
   'game.js',
   'LICENSE', 'NOTICE.md',
   'config', 'data', 'utils', 'assets', 'subpackages',
-  'platform/adapter.js', 'platform/sidebar.js'
+  'platform/adapter.js'
 ];
 const SKIP = new Set(['data/words_b56_legacy.js']);
 
-const LIMITS = {
-  wx: { label: '微信小游戏', main: 4 * 1024 * 1024, total: 30 * 1024 * 1024, field: 'subpackages' },
-  tt: { label: '抖音小游戏', main: 4 * 1024 * 1024, total: 20 * 1024 * 1024, field: 'subPackages' }
-};
+const LIMIT = { label: '微信小游戏', main: 4 * 1024 * 1024, total: 30 * 1024 * 1024, field: 'subpackages' };
 
 function mib(n) { return (n / 1048576).toFixed(2) + ' MiB'; }
 
@@ -64,96 +57,73 @@ function walkJs(dir, cb) {
   }
 }
 
-// 护栏：产物里不应再有直接的 wx.* 调用（新增 API 必须走 platform/adapter.js）；
-// 同时确认抖音侧边栏复访调用存在于产物中。
+// 护栏：产物里不应再有直接的 wx.* 调用（新增 API 必须走 platform/adapter.js）。
 function scanRefs(out) {
   const issues = [];
-  let sidebarOk = false;
   walkJs(out, (file) => {
     const rel = path.relative(out, file).replace(/\\/g, '/');
     const text = fs.readFileSync(file, 'utf8');
     if (/\bwx\s*\./.test(text)) issues.push(rel + ' 仍有直接的 wx.* 调用');
-    if (rel === 'platform/sidebar.js' && text.indexOf('navigateToScene') >= 0) sidebarOk = true;
   });
-  if (!sidebarOk) issues.push('platform/sidebar.js 缺少 navigateToScene（抖音侧边栏复访必接）');
   return issues;
 }
 
-function build(platform) {
-  const cfg = LIMITS[platform];
-  const out = path.join(DIST, platform);
+function build() {
   try {
-    fs.rmSync(out, { recursive: true, force: true });
+    fs.rmSync(OUT, { recursive: true, force: true });
   } catch (e) {
-    // 开发者工具可能正打开 dist/<platform>/（Windows 文件占用导致整目录删除失败）。
+    // 开发者工具可能正打开 dist/wx/（Windows 文件占用导致整目录删除失败）。
     // 此时退化为「保留目录 + 覆盖写入」，不中断构建；IDE 里手动点一次编译即可刷新。
     console.log('  ! 产物目录被占用，跳过整目录清理，改为覆盖写入（请在 IDE 中点「编译」刷新）');
   }
-  fs.mkdirSync(out, { recursive: true });
+  fs.mkdirSync(OUT, { recursive: true });
 
   for (const item of SHARED) {
-    copyInto(path.join(ROOT, item), path.join(out, item), item);
+    copyInto(path.join(ROOT, item), path.join(OUT, item), item);
   }
 
-  const cfgDir = platform === 'wx' ? ROOT : path.join(ROOT, 'platform/tt');
   const pc = {};
   for (const f of ['game.json', 'project.config.json']) {
-    const src = path.join(cfgDir, f);
-    if (!fs.existsSync(src)) throw new Error('缺少平台配置: ' + src);
+    const src = path.join(ROOT, f);
+    if (!fs.existsSync(src)) throw new Error('缺少配置: ' + src);
     pc[f] = JSON.parse(fs.readFileSync(src, 'utf8'));
-    fs.writeFileSync(path.join(out, f), JSON.stringify(pc[f], null, 2) + '\n');
+    fs.writeFileSync(path.join(OUT, f), JSON.stringify(pc[f], null, 2) + '\n');
   }
 
   const gj = pc['game.json'];
-  const subs = gj[cfg.field];
+  const subs = gj[LIMIT.field];
   if (!Array.isArray(subs) || subs.length === 0) {
-    throw new Error(platform + ' 端 game.json 缺少 ' + cfg.field + ' 字段');
-  }
-  if (platform === 'tt' && gj.subpackages) {
-    throw new Error('抖音端误用了小写 subpackages，必须用 subPackages（驼峰）');
+    throw new Error('game.json 缺少 ' + LIMIT.field + ' 字段');
   }
   for (const s of subs) {
-    if (!fs.existsSync(path.join(out, s.root))) {
+    if (!fs.existsSync(path.join(OUT, s.root))) {
       throw new Error('分包目录不存在: ' + s.root);
     }
   }
 
-  const issues = scanRefs(out);
+  const issues = scanRefs(OUT);
   if (issues.length) throw new Error('源码检查未通过:\n  - ' + issues.join('\n  - '));
 
-  const subSize = subs.reduce((n, s) => n + dirSize(path.join(out, s.root)), 0);
-  const total = dirSize(out);
+  const subSize = subs.reduce((n, s) => n + dirSize(path.join(OUT, s.root)), 0);
+  const total = dirSize(OUT);
   const main = total - subSize;
   const flag = (v, limit) => (v <= limit ? 'OK' : '超限');
 
-  console.log('[' + platform + '] ' + cfg.label + ' -> ' + path.relative(ROOT, out).replace(/\\/g, '/'));
-  console.log('  主包   ' + mib(main).padEnd(12) + '/ ' + mib(cfg.main) + '  ' + flag(main, cfg.main));
+  console.log('[wx] ' + LIMIT.label + ' -> ' + path.relative(ROOT, OUT).replace(/\\/g, '/'));
+  console.log('  主包   ' + mib(main).padEnd(12) + '/ ' + mib(LIMIT.main) + '  ' + flag(main, LIMIT.main));
   console.log('  分包   ' + mib(subSize).padEnd(12) + '(' + subs.length + ' 个)');
-  console.log('  总包   ' + mib(total).padEnd(12) + '/ ' + mib(cfg.total) + '  ' + flag(total, cfg.total));
-  console.log('  分包字段 ' + cfg.field + ' / 源码检查 OK');
-  if (platform === 'tt') {
-    const appid = pc['project.config.json'].appid || '';
-    if (appid === 'tt0000000000000000' || !/^tt[0-9a-z]{16,20}$/i.test(appid)) {
-      console.log('  ⚠ appid 不可用（' + (appid || '空') + '），请在 platform/tt/project.config.json 填入抖音小游戏 AppID');
-    } else {
-      console.log('  AppID  ' + appid);
-    }
-  }
-  if (main > cfg.main || total > cfg.total) throw new Error(platform + ' 端包体超限');
+  console.log('  总包   ' + mib(total).padEnd(12) + '/ ' + mib(LIMIT.total) + '  ' + flag(total, LIMIT.total));
+  console.log('  分包字段 ' + LIMIT.field + ' / 源码检查 OK');
+  if (main > LIMIT.main || total > LIMIT.total) throw new Error('包体超限');
 }
 
 function main() {
-  const args = process.argv.slice(2);
-  if (args.indexOf('--help') >= 0) {
-    console.log('用法: node scripts/build.js [--platform all|wx|tt]');
+  if (process.argv.indexOf('--help') >= 0) {
+    console.log('用法: node scripts/build.js');
     return;
   }
-  const i = args.indexOf('--platform');
-  const want = i >= 0 ? args[i + 1] : 'all';
-  if (!['all', 'wx', 'tt'].includes(want)) throw new Error('--platform 只能是 all / wx / tt');
-  const targets = want === 'all' ? PLATFORMS : [want];
-  fs.mkdirSync(DIST, { recursive: true });
-  for (const p of targets) build(p);
+  fs.mkdirSync(path.join(ROOT, 'dist'), { recursive: true });
+  build();
   console.log('BUILD_OK');
 }
 
