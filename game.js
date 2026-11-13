@@ -159,6 +159,11 @@ let spellOrder = [];             // 已选字母对应的候选下标顺序
 let spellSolved = false;         // 当前单词是否已拼对（显示弹框）
 let spellBackBtn = null;         // 拼写页返回按钮（左上角）
 let spellSpeakerBtn = null;      // 拼写页小喇叭按钮（底部）
+// 干扰强度（进入听音拼单词 / 中文转单词前手动选择）：0=无干扰，1=一倍字母干扰，2=两倍字母干扰
+let spellDistractLevel = 1;      // 默认一倍字母干扰
+let spellDistractSelMode = 'listen'; // 正在配置的模式（'listen' / 'cn'）
+let spellDistractSelOpts = [];   // 干扰强度选择页三个选项区域（{rect, level}）
+let spellDistractSelBack = null; // 干扰强度选择页返回按钮（左上角）
 let spellNextBtn = null;         // 答对弹框“下一个”按钮
 let spellDialogSpeakBtn = null;  // 答对弹框“听发音”按钮
 
@@ -206,7 +211,7 @@ let linkFoundCn = '';              // 刚连对的中文释义（弹框显示）
 let linkMsg = '';                  // 连错时的短暂提示
 let linkMsgTimer = 0;              // 提示剩余显示时间(ms)
 let linkBackBtn = null;            // 返回按钮（左上角）
-let linkCaseBtn = null;            // 大小写版本切换按钮（右上角）
+let linkCaseBtn = null;            // 大小写版本切换按钮（返回键右侧，避开微信右上角胶囊按钮）
 // 当前字母版本：false = 大写版(A~Z)，true = 小写英文版(a~z)。
 // 仅控制网格字母的显示形态；linkGrid 内部始终存大写，判定统一转小写比较，互不影响。
 // 不随 startLink() 重置，玩家切换一次后在本次游戏会话内保持。
@@ -322,15 +327,15 @@ function endGame() {
 
 // 生成候选字母：数量为单词长度的 2~3 倍（至少 6 个），全部小写。
 // 必含该单词所需的全部字母（含重复），其余为随机干扰项。
-function buildCandidates(word) {
+// level: 0=无干扰（仅单词本身字母），1=一倍字母干扰（额外混入 1×词长 的字母），2=两倍字母干扰
+function buildCandidates(word, level) {
   const need = word.split('');              // 已含单词内的重复字母
   const n = need.length;
-  let total = n * 2 + Math.floor(Math.random() * (n + 1)); // 区间 [2n, 3n]
-  if (total < 6) total = 6;                 // 最少 6 个
+  const extra = n * level;                   // 干扰字母数量 = level × 词长
   const pool = need.slice();
   const alpha = 'abcdefghijklmnopqrstuvwxyz';
   let guard = 0;
-  while (pool.length < total && guard < 300) {
+  while (pool.length < n + extra && guard < 300) {
     pool.push(alpha[Math.floor(Math.random() * 26)]);
     guard++;
   }
@@ -342,7 +347,7 @@ function loadSpellWord(i) {
   const w = spellList[i];
   spellWord = w.en.toLowerCase();
   spellMeaning = w.cn;
-  spellCandidates = buildCandidates(spellWord);
+  spellCandidates = buildCandidates(spellWord, spellDistractLevel);
   spellOrder = [];
   spellSolved = false;
 }
@@ -1141,6 +1146,73 @@ function drawSpellMode() {
   });
 }
 
+// 干扰强度选择页：从听音拼单词 / 中文转单词进入时先弹此页，手动选「无干扰 / 一倍字母干扰 / 两倍字母干扰」
+function enterSpellDistractSel(mode) {
+  spellDistractSelMode = (mode === 'cn') ? 'cn' : 'listen';
+  state = 'spellDistractSel';
+}
+
+function drawSpellDistractSel() {
+  ctx.fillStyle = bgGrad;
+  ctx.fillRect(0, 0, W, H);
+
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+
+  // 左上角返回按钮：回到模式选择页
+  spellDistractSelBack = { x: 14, y: 14, w: 52, h: 40 };
+  drawBackButton(spellDistractSelBack);
+
+  // 标题：当前模式 + 选择干扰强度
+  ctx.fillStyle = '#5a2d00';
+  ctx.font = 'bold ' + Math.min(30, W * 0.08) + 'px sans-serif';
+  ctx.fillText(spellDistractSelMode === 'cn' ? '中文转单词' : '听音拼单词', W / 2, H * 0.13);
+  ctx.fillStyle = '#b06a2b';
+  ctx.font = Math.min(20, W * 0.055) + 'px sans-serif';
+  ctx.fillText('选择干扰强度', W / 2, H * 0.19);
+
+  // 三个选项卡片（上下排布、居中）：无干扰 / 一倍字母干扰 / 两倍字母干扰
+  const opts = [
+    { level: 0, title: '无干扰', sub: '只用单词本身字母' },
+    { level: 1, title: '一倍字母干扰', sub: '额外混入 1×词长 的字母' },
+    { level: 2, title: '两倍字母干扰', sub: '额外混入 2×词长 的字母' },
+  ];
+  const cardW = Math.min(360, W - 80);
+  const n = opts.length;
+  const gap = 16;
+  const cardH = 76;
+  const totalH = n * cardH + (n - 1) * gap;
+  const startY = Math.max(H * 0.28, (H - totalH) / 2);
+
+  spellDistractSelOpts = [];
+  opts.forEach((o, i) => {
+    const rect = { x: W / 2 - cardW / 2, y: startY + i * (cardH + gap), w: cardW, h: cardH };
+    spellDistractSelOpts.push({ rect, level: o.level });
+    const active = (spellDistractLevel === o.level);
+    ctx.fillStyle = active ? 'rgba(255,224,196,0.98)' : 'rgba(255,255,255,0.97)';
+    roundRectPath(ctx, rect.x, rect.y, rect.w, rect.h, 18);
+    ctx.fill();
+    ctx.lineWidth = active ? 3 : 2;
+    ctx.strokeStyle = active ? 'rgba(255,122,24,0.9)' : 'rgba(255,122,24,0.4)';
+    roundRectPath(ctx, rect.x, rect.y, rect.w, rect.h, 18);
+    ctx.stroke();
+    ctx.textAlign = 'left';
+    ctx.fillStyle = '#5a2d00';
+    ctx.font = 'bold ' + Math.min(26, cardH * 0.34) + 'px sans-serif';
+    ctx.fillText(o.title, rect.x + 24, rect.y + cardH * 0.38);
+    ctx.fillStyle = '#9a6a3a';
+    ctx.font = Math.min(17, cardH * 0.22) + 'px sans-serif';
+    ctx.fillText(o.sub, rect.x + 24, rect.y + cardH * 0.72);
+    if (active) {
+      ctx.fillStyle = 'rgba(255,122,24,0.95)';
+      ctx.beginPath();
+      ctx.arc(rect.x + rect.w - 30, rect.y + cardH / 2, 9, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  });
+  ctx.textAlign = 'center';
+}
+
 // 单词表查阅页：列出该单元（或全部章节）下的所有单词，提供中英文与发音喇叭
 function drawWordList() {
   ctx.fillStyle = bgGrad;
@@ -1575,7 +1647,7 @@ function drawSpell() {
   const cols = 5;
   const gap = 12;                          // 方块间距（含行间距），紧凑排布
   const areaTop = boxY + boxH + 26;
-  const areaBottom = H - 130;              // 给底部小喇叭留位
+  const areaBottom = H - 130;              // 给底部小喇叭/中文卡留位
   const areaW = W - sideMargin * 2;
   const cellW = areaW / cols;
   const maxRows = 6;                       // 以最多 6 行为基准算方块尺寸，长单词也能放下
@@ -1628,7 +1700,7 @@ function drawSpell() {
 // 玩法：从章节词库抽词，把每个词的字母按「横 / 竖 / 一次转弯的 L 形」路径摆进 N×N 网格，
 // 剩余格子填干扰字母；玩家按住拖动经过上下左右相邻的格子，松手时把路径字母拼成字符串，
 // 命中未找到的目标词即判定连对（正向、反向都算，允许从词尾往回连）。
-// 字母版本：右上角按钮可在「大写版 A~Z」与「小写英文版 a~z」间切换，
+// 字母版本：返回键右侧按钮可在「大写版 A~Z」与「小写英文版 a~z」间切换，
 // 只改网格字母（含干扰字母）的显示形态与连对弹框里的单词；
 // 内部 linkGrid 恒为大写、判定恒转小写比较，底部中文提示始终显示中文。
 
@@ -1786,9 +1858,9 @@ function drawLink() {
   linkBackBtn = { x: 14, y: 14, w: 52, h: 40 };
   drawBackButton(linkBackBtn);
 
-  // 右上角：字母版本切换。只改网格字母显示（大写 A~Z / 小写 a~z），
+  // 返回键右侧：字母版本切换（原置右上角会与微信系统胶囊按钮重合，故移到左上与返回键相邻）。只改网格字母显示（大写 A~Z / 小写 a~z），
   // 底部中文提示与连线判定都不受影响；切换后不重置本局进度，可随时来回切。
-  linkCaseBtn = { x: W - 14 - 84, y: 14, w: 84, h: 40 };
+  linkCaseBtn = { x: 14 + 52 + 8, y: 14, w: 84, h: 40 };  // 返回键（x:14,w:52）右侧 8px，避开微信右上角胶囊
   const cb = linkCaseBtn;
   ctx.fillStyle = linkLowercase ? 'rgba(255,204,128,0.95)' : 'rgba(255,255,255,0.9)';
   roundRectPath(ctx, cb.x, cb.y, cb.w, cb.h, 10);
@@ -1805,18 +1877,18 @@ function drawLink() {
 
   ctx.fillStyle = '#5a2d00';
   ctx.font = 'bold ' + Math.min(30, W * 0.08) + 'px sans-serif';
-  ctx.fillText('字母连连', W / 2, Math.round(H * 0.09));
+  ctx.fillText('字母连连', W / 2 + 30, Math.round(H * 0.09));
   ctx.fillStyle = '#8a5a2b';
   ctx.font = Math.min(17, W * 0.042) + 'px sans-serif';
-  ctx.fillText('拖动连成单词 · 横 / 竖 / 转弯 · 释义可滑动', W / 2, Math.round(H * 0.145));
+  ctx.fillText('拖动连成单词 · 横 / 竖 / 转弯 · 释义可滑动', W / 2 + 30, Math.round(H * 0.145));
   // 连错提示与章节名共用该行，避免文字叠在一起
   if (linkMsgTimer > 0 && linkMsg) {
     ctx.fillStyle = '#d84315';
     ctx.font = 'bold ' + Math.min(19, W * 0.048) + 'px sans-serif';
-    ctx.fillText(linkMsg, W / 2, Math.round(H * 0.185));
+    ctx.fillText(linkMsg, W / 2 + 30, Math.round(H * 0.185));
   } else if (linkChapterName) {
     ctx.font = Math.min(15, W * 0.038) + 'px sans-serif';
-    ctx.fillText(linkChapterName, W / 2, Math.round(H * 0.185));
+    ctx.fillText(linkChapterName, W / 2 + 30, Math.round(H * 0.185));
   }
 
   const cellW = linkCellRects.length ? linkCellRects[0].w : 40;
@@ -2032,6 +2104,7 @@ function draw() {
   else if (state === 'loadFail') drawLoadFail();
   else if (state === 'chapter') drawChapter();
   else if (state === 'spellMode') drawSpellMode();
+  else if (state === 'spellDistractSel') drawSpellDistractSel();
   else if (state === 'spell') drawSpell();
   else if (state === 'wordList') drawWordList();
   else if (state === 'match') drawMatch();
@@ -2048,7 +2121,7 @@ function draw() {
 function startDictation(chapterId) {
   const ch = SPELL_CHAPTERS.find((c) => c.id === chapterId);
   dictChapterName = ch ? ch.name : '';
-  dictWords = getChapterWordsPlain(chapterId);   // 已按英文去重，含短语（听写不要求逐字母拼写）
+  dictWords = shuffled(getChapterWordsPlain(chapterId));   // 已按英文去重、打乱顺序，避免按书本章节顺序背出
   if (!dictWords.length) { state = 'spellMode'; return; }
   if (!isGradeReady(currentGradeId)) loadGradeAudio(currentGradeId); // 静默补下载音频分包
   dictIndex = 0;
@@ -2336,7 +2409,16 @@ adapter.onTouchStart((e) => {
         else if (item.mode === 'match') startMatch(spellChapterId);
         else if (item.mode === 'link') startLink(spellChapterId);
         else if (item.mode === 'dict') startDictation(spellChapterId);
-        else startSpellChapter(spellChapterId, item.mode);
+        else enterSpellDistractSel(item.mode);
+        return;
+      }
+    }
+  } else if (state === 'spellDistractSel') {
+    if (hit(spellDistractSelBack, px, py)) { state = 'spellMode'; return; }
+    for (const opt of spellDistractSelOpts) {
+      if (hit(opt.rect, px, py)) {
+        spellDistractLevel = opt.level;          // 选定干扰强度后进入拼写
+        startSpellChapter(spellChapterId, spellDistractSelMode);
         return;
       }
     }
