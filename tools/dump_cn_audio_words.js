@@ -12,9 +12,11 @@ const { BOOKS, GRADES, slug } = require('../data/book_index');
 function ttsText(cn) {
   let s = String(cn || '').trim();
   s = s.replace(/[（(][^）)]*[）)]/g, '');        // 去掉括号及其补充说明
+  s = s.replace(/\bthis\b/gi, '这');              // 英文混入的 this 转为「这」，纯中文朗读
   s = s.replace(/[;；/]/g, '，');
   s = s.replace(/[、,]/g, '，');
-  s = s.replace(/[…．.]{2,}/g, '，');
+  s = s.replace(/…/g, '');                        // 省略号直接删除（不插逗号，避免多余停顿）
+  s = s.replace(/[．.]{2,}/g, '，');              // 连续句点/中点仍转逗号（保留原逻辑）
   s = s.replace(/[：:]/g, '，');
   s = s.replace(/\s+/g, ' ').replace(/^[，\s]+|[，\s]+$/g, '');
   return s || String(cn || '').trim();            // 极端情况回退原文

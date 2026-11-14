@@ -1,9 +1,13 @@
 // Copyright (c) 2026 zhangyongpo. SPDX-License-Identifier: Apache-2.0
 // 本文件为 letterdrop-wx 项目独立开发源码；许可证见 LICENSE，第三方资产声明见 NOTICE.md。
 // game.js —— 微信小游戏版（原生 Canvas 2D，无 DOM / 无 WXML）
-// 玩法：App 报出目标字母读音，屏幕上 6 个字母（3列×2排）掉落，
-// 玩家在落地前点中正确字母消除；不区分大小写；点错（干扰项）扣分（不低于0）；
-// 目标字母落地漏点扣 1 命；每 10 组速度 +1 档（无上限）；3 命结束。
+// 找字母含两种玩法：
+//   ① 字母掉落：App 报出目标字母读音，屏幕上 6 个字母（3列×2排）掉落，
+//      玩家在落地前点中正确字母消除；不区分大小写；点错（干扰项）扣分（不低于0）；
+//      目标字母落地漏点扣 1 命；每 10 组速度 +1 档（无上限）；3 命结束。
+//   ② 字母点点：屏幕铺满大小写字母（每次 10~20 种、每种个数随机），播报目标字母两遍后
+//      给 5 秒倒计时，限时内点出屏幕上全部该字母即进入下一个目标，倒计时重新开始计；
+//      超时扣 1 命，点错（非目标字母）扣分；3 命结束。
 // 所有平台 API 统一经 platform/adapter.js 收口，本文件不直接引用 wx。
 
 const {
@@ -96,18 +100,22 @@ bgGrad.addColorStop(0, '#fff3e0');
 bgGrad.addColorStop(1, '#ffe0b2');
 
 // ---- 游戏状态 ----
-// state: 'nav' | 'home' | 'playing' | 'gameover' | 'confirmExit'
+// state: 'nav' | 'home' | 'playing' | 'dotMode' | 'gameover' | 'confirmExit'
 //         | 'grade' | 'loading' | 'loadFail' | 'chapter' | 'spellMode'
-//         | 'spell' | 'wordList' | 'match' | 'link' | 'dictation'
+//         | 'spellConfig' | 'spell' | 'wordList' | 'match' | 'link' | 'dictation'
+//         | 'dotConfig'
 //   nav         —— 模式选择导航页（找字母 / 拼单词 两个模式均可进入）
-//   home        —— 找字母模式主页（由 FIND_LETTER_ENABLED 控制是否开放）
-//   playing     —— 找字母游戏中
+//   home        —— 找字母模式主页（两张卡片：字母掉落 / 字母点点，由 FIND_LETTER_ENABLED 控制是否开放）
+//   playing     —— 找字母·字母掉落 游戏中
+//   dotConfig   —— 字母点点二级页（选择单局用时：30 / 60 / 90 / 120 秒）
+//   dotMode     —— 找字母·字母点点 游戏中（屏幕铺满字母，限时内清空整屏）
 //   confirmExit —— 找字母游戏中点击“退出”后的二次确认弹框（游戏暂停）
 //   grade       —— 拼单词：一级菜单（三~六年级共 6 册，卡片可上下滑动）
 //   loading     —— 年级发音分包下载中（进度条）
 //   loadFail    —— 分包下载失败（可重试 / 仍要进入，发音回退逐字母拼读）
 //   chapter     —— 拼单词：二级菜单（具体章节 + 全部章节）
-//   spellMode   —— 练习模式选择（听音拼 / 中文转 / 查阅 / 对对碰 / 字母连连 / 单词听写）
+//   spellMode   —— 练习模式选择（单词拼写 / 全部单词 / 对对碰 / 字母连连 / 单词听写）
+//   spellConfig —— 单词拼写的二级配置页（练习方式：听音拼单词 / 中文转单词；干扰强度：无 / 一倍 / 两倍）
 //   spell       —— 拼单词：拼写练习（含答对后的弹框）
 //   link        —— 字母连连：字母网格拖动连线找单词（含答对弹框与完成态）
 //   dictation   —— 单词听写：按间隔自动翻词并循环，四种发音模式，可手动上/下一个
@@ -126,7 +134,6 @@ let spokenThisGroup = false;     // 本组是否已在第一排出现后播报�
 let lastTime = Date.now();
 let groupTimer = null;
 let scoreBumpTimer = 0;          // 得分 +分 放大动画剩余时间(ms)
-let startBtn = null;             // 首页“开始游戏”按钮区域
 let restartBtn = null;           // 结束页“再来一局”按钮区域
 let navFindBtn = null;           // 导航页“找字母”菜单区域
 let navSpellBtn = null;          // 导航页“拼单词”菜单区域
@@ -134,6 +141,27 @@ let backBtn = null;              // 返回导航页按钮（主页/结束页左�
 let exitBtn = null;              // 游戏中左上角“退出”按钮
 let exitConfirmBtn = null;       // 退出确认弹框“确定退出”按钮
 let exitCancelBtn = null;        // 退出确认弹框“继续游戏”按钮
+
+// 找字母主页：两张玩法卡片（字母掉落 / 字母点点）
+let homeModeCards = [];
+
+// ---- 字母点点（dot）模式相关状态 ----
+let dotLetters = [];            // 屏幕单元格 [{char, display, x, y, size, color, found}]
+let dotTarget = '';             // 当前目标字母（大写）
+let dotTargetRemaining = 0;     // 当前目标在屏幕上剩余未找出的数量
+let dotActive = false;          // 是否正在计时（目标轮次进行中）
+let dotCols = 0, dotRows = 0, dotCellSize = 0, dotGridTop = 0;
+let dotExitBtn = null;          // 游戏中“退出”按钮
+let dotBest = adapter.getStorageSync('letterdot_best') || 0;
+let lastMode = 'drop';          // 最近进入的找字母玩法（'drop' | 'dot'），用于结束/确认退出时区分
+// 字母点点二级页（dotConfig）：单局用时四选一 30/60/90/120 秒
+let dotTimeSel = 30000;         // 选中的单局总用时（ms），默认 30 秒
+let dotTimeLeft = 0;            // 本局剩余总用时（ms）
+let dotConfigBack = null;       // 二级页返回按钮（左上角，回到 home）
+let dotConfigOpts = [];         // 二级页时间选项卡片（{rect, ms}）
+let dotConfigStart = null;      // 二级页“开始”按钮
+let dotWin = false;             // 本局是否成功（限时内清空整屏）
+let dotEndReason = '';          // 结束原因：'win' | 'timeout' | 'dead' | ''
 
 // ---- 拼单词模式相关状态/变量 ----
 let gradeCards = [];             // 一级菜单各年级卡片 [{rect, id}]（仅可见卡片）
@@ -159,11 +187,13 @@ let spellOrder = [];             // 已选字母对应的候选下标顺序
 let spellSolved = false;         // 当前单词是否已拼对（显示弹框）
 let spellBackBtn = null;         // 拼写页返回按钮（左上角）
 let spellSpeakerBtn = null;      // 拼写页小喇叭按钮（底部）
-// 干扰强度（进入听音拼单词 / 中文转单词前手动选择）：0=无干扰，1=一倍字母干扰，2=两倍字母干扰
+// 干扰强度（单词拼写配置页选择）：0=无干扰，1=一倍字母干扰，2=两倍字母干扰
 let spellDistractLevel = 1;      // 默认一倍字母干扰
-let spellDistractSelMode = 'listen'; // 正在配置的模式（'listen' / 'cn'）
-let spellDistractSelOpts = [];   // 干扰强度选择页三个选项区域（{rect, level}）
-let spellDistractSelBack = null; // 干扰强度选择页返回按钮（左上角）
+// 单词拼写配置页（spellConfig）：练习方式 + 干扰强度合并在一页，取代原先「进入前单独选难度」的第三层
+let spellConfigMode = 'listen';  // 选中的练习方式：'listen' 听音拼单词 / 'cn' 中文转单词
+let spellConfigOpts = [];        // 配置页可点击区域（{rect, kind:'mode'|'level', value}）
+let spellConfigBack = null;      // 配置页返回按钮（左上角）
+let spellConfigStart = null;     // 配置页“开始”按钮
 let spellNextBtn = null;         // 答对弹框“下一个”按钮
 let spellDialogSpeakBtn = null;  // 答对弹框“听发音”按钮
 
@@ -254,6 +284,7 @@ function startGame() {
   groupActive = false;
   scoreBumpTimer = 0;
   lastTime = Date.now();
+  lastMode = 'drop';
   state = 'playing';
   startGroup();
 }
@@ -317,9 +348,15 @@ function loseLife() {
 
 function endGame() {
   groupActive = false;
+  dotActive = false;
   if (groupTimer) clearTimeout(groupTimer);
-  best = Math.max(best, score);
-  adapter.setStorageSync('letterdrop_best', best);
+  if (lastMode === 'dot') {
+    dotBest = Math.max(dotBest, score);
+    adapter.setStorageSync('letterdot_best', dotBest);
+  } else {
+    best = Math.max(best, score);
+    adapter.setStorageSync('letterdrop_best', best);
+  }
   state = 'gameover';
 }
 
@@ -447,6 +484,7 @@ function toggleCandidate(idx) {
 
 // ---- 更新 ----
 function update(dt) {
+  if (state === 'dotMode') { updateDot(dt); return; }
   if (state !== 'playing' || !groupActive) return;
   const speed = speedForLevel(groupLevel);
   const remaining = [];
@@ -537,6 +575,230 @@ function drawLetter(l) {
   ctx.fillText(l.display, l.x, l.y);
 }
 
+// ============ 字母点点（dot）模式 ============
+// 屏幕铺满大小写字母（每次 10~20 种、每种个数随机）；进入后自动播报第一个目标字母两遍，
+// 点完全部该字母即自动播报下一个字母；在二级页选定的单局总用时内清空整屏即闯关成功，
+// 超时未清空或点错累计耗尽生命即失败；点错一次扣 1 生命。
+
+// 进入字母点点：重置计分/生命，铺屏并开第一个目标
+function startDot() {
+  if (groupTimer) clearTimeout(groupTimer);
+  score = 0;
+  lives = MAX_LIVES;
+  dotLetters = [];
+  dotTarget = '';
+  dotTargetRemaining = 0;
+  dotActive = false;
+  dotWin = false;
+  dotEndReason = '';
+  dotTimeLeft = dotTimeSel;     // 单局总计时（由二级页选择）
+  scoreBumpTimer = 0;
+  lastTime = Date.now();
+  lastMode = 'dot';
+  state = 'dotMode';
+  dotFillScreen();
+  dotNextTarget();
+}
+
+// 铺满一个屏幕：网格布局，选 K∈[10,20] 种字母，每种随机个数（合计铺满网格），
+// 单元格大小写随机显示；匹配按字母（不区分大小写，沿用掉落玩法规则）。
+function dotFillScreen() {
+  const topReserve = 112;        // 顶部留给分数 / 倒计时条 / 退出按钮
+  const bottomPad = 12;
+  const availH = H - topReserve - bottomPad;
+  let cols = Math.max(5, Math.min(8, Math.round(W / 92)));
+  let cell = W / cols;
+  let rows = Math.max(4, Math.min(11, Math.floor(availH / cell)));
+  cell = Math.min(W / cols, availH / rows);   // 重新校准以撑满可视区
+  const total = cols * rows;
+  const K = Math.min(total, 10 + Math.floor(Math.random() * 11)); // 10..20 种
+  // 随机选 K 个不同字母
+  const pool = shuffled(LETTERS.slice()).slice(0, K);
+  const counts = pool.map(() => 1);            // 每种至少 1 个
+  let rem = total - K;
+  while (rem-- > 0) counts[Math.floor(Math.random() * K)]++;  // 剩余随机分配 -> 每种个数随机
+  // 展开成单元格列表并打乱
+  const flat = [];
+  pool.forEach((ch, i) => { for (let c = 0; c < counts[i]; c++) flat.push(ch); });
+  const cells = shuffled(flat);
+  // 居中铺放
+  const gridW = cols * cell;
+  const offX = (W - gridW) / 2;
+  const offY = topReserve + (availH - rows * cell) / 2;
+  dotLetters = cells.map((ch, idx) => {
+    const col = idx % cols;
+    const row = Math.floor(idx / cols);
+    return {
+      char: ch,
+      display: Math.random() < 0.5 ? ch : ch.toLowerCase(),
+      x: offX + col * cell + cell / 2,
+      y: offY + row * cell + cell / 2,
+      size: cell * 0.42,
+      found: false
+    };
+  });
+  dotCols = cols; dotRows = rows; dotCellSize = cell; dotGridTop = offY;
+}
+
+// 选出下一个目标字母：从屏幕上仍存在的种类里随机挑，播报两遍；
+// 若整屏字母均已找到 -> 闯关成功（endGame）；否则开新一轮、播报新目标。
+function dotNextTarget() {
+  const present = {};
+  for (const l of dotLetters) if (!l.found) present[l.char] = (present[l.char] || 0) + 1;
+  const kinds = Object.keys(present);
+  if (kinds.length === 0) { dotWin = true; dotEndReason = 'win'; endGame(); return; } // 整屏清空 -> 成功
+  dotTarget = kinds[Math.floor(Math.random() * kinds.length)];
+  dotTargetRemaining = present[dotTarget];
+  dotActive = true;
+  announceLetter(dotTarget, 600);   // 第一遍自然结束后间隔 600ms 再播第二遍
+}
+
+// 帧更新：单局总计时递减；整屏清空即成功，超时即失败
+function updateDot(dt) {
+  if (!dotActive) return;
+  dotTimeLeft -= dt;
+  if (dotTargetRemaining <= 0) {
+    dotActive = false;
+    score += 5;                     // 找全一个字母的小奖励
+    dotNextTarget();
+    return;
+  }
+  if (dotTimeLeft <= 0) {
+    dotActive = false;
+    dotWin = false;
+    dotEndReason = 'timeout';       // 超时未清空整屏 -> 失败
+    endGame();
+  }
+}
+
+// 点击判定：命中目标字母 -> 标记找到并计分；命中非目标 -> 扣 1 生命（耗尽则失败）；已找到的格子忽略
+function onTapDot(px, py) {
+  if (!dotActive) return;
+  for (let i = dotLetters.length - 1; i >= 0; i--) {
+    const l = dotLetters[i];
+    if (l.found) continue;
+    if (Math.abs(l.x - px) < l.size && Math.abs(l.y - py) < l.size) {
+      if (l.char === dotTarget) {
+        l.found = true;
+        dotTargetRemaining -= 1;
+        score += CORRECT_SCORE;
+        scoreBumpTimer = 250;
+        if (score > dotBest) { dotBest = score; adapter.setStorageSync('letterdot_best', dotBest); }
+      } else {
+        dotWin = false;
+        dotEndReason = 'dead';      // 点错 -> 扣 1 生命（耗尽则失败）
+        loseLife();
+      }
+      return;
+    }
+  }
+}
+
+// 绘制字母点点画面
+function drawDot() {
+  ctx.fillStyle = bgGrad;
+  ctx.fillRect(0, 0, W, H);
+
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  for (const l of dotLetters) drawDotLetter(l);
+
+  // 顶部得分（带 +分 放大动画）
+  const bump = scoreBumpTimer > 0 ? 1.3 : 1;
+  ctx.save();
+  ctx.translate(W / 2, 40);
+  ctx.scale(bump, bump);
+  ctx.fillStyle = '#ff7a18';
+  ctx.font = 'bold 36px sans-serif';
+  ctx.fillText('得分 ' + score, 0, 0);
+  ctx.restore();
+
+  // 剩余时间（右侧，与得分同行；不足 5 秒变红）
+  ctx.textAlign = 'right';
+  ctx.textBaseline = 'middle';
+  ctx.fillStyle = dotTimeLeft < 5000 ? '#c0392b' : '#8a5a2b';
+  ctx.font = 'bold 26px sans-serif';
+  ctx.fillText(Math.ceil(dotTimeLeft / 1000) + 's', W - 24, 40);
+
+  // 生命值（爱心，居中）
+  drawHearts(W / 2, 80, lives);
+
+  // 单局总用时进度条（剩余比例；最后 20% 变红）
+  const bw = W - 60, bx = 30, by = 98, bh = 10;
+  ctx.fillStyle = 'rgba(255,255,255,0.5)';
+  roundRectPath(ctx, bx, by, bw, bh, bh / 2);
+  ctx.fill();
+  const frac = dotTimeSel > 0 ? Math.max(0, dotTimeLeft / dotTimeSel) : 0;
+  ctx.fillStyle = frac < 0.2 ? '#c0392b' : '#ff7a18';
+  roundRectPath(ctx, bx, by, bw * frac, bh, bh / 2);
+  ctx.fill();
+
+  // 左上角“退出”按钮
+  dotExitBtn = { x: 20, y: 20, w: 84, h: 44 };
+  ctx.fillStyle = 'rgba(255,255,255,0.85)';
+  roundRectPath(ctx, dotExitBtn.x, dotExitBtn.y, dotExitBtn.w, dotExitBtn.h, 22);
+  ctx.fill();
+  ctx.lineWidth = 1.5;
+  ctx.strokeStyle = 'rgba(192,57,43,0.5)';
+  roundRectPath(ctx, dotExitBtn.x, dotExitBtn.y, dotExitBtn.w, dotExitBtn.h, 22);
+  ctx.stroke();
+  ctx.fillStyle = '#c0392b';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.font = 'bold 24px sans-serif';
+  ctx.fillText('退出', dotExitBtn.x + dotExitBtn.w / 2, dotExitBtn.y + dotExitBtn.h / 2 + 1);
+}
+
+// 绘制生命值爱心：居中排布 MAX_LIVES 颗，剩余为红、耗尽为灰
+function drawHearts(cx, cy, n) {
+  const s = 9;
+  const gap = s * 1.7;
+  const total = MAX_LIVES * gap;
+  let x = cx - total / 2 + gap / 2;
+  for (let i = 0; i < MAX_LIVES; i++) {
+    drawHeart(x, cy, s, i < n ? '#e74c3c' : 'rgba(0,0,0,0.16)');
+    x += gap;
+  }
+}
+
+// 绘制单颗爱心（两弧 + 下尖三角）
+function drawHeart(cx, cy, s, color) {
+  ctx.fillStyle = color;
+  ctx.beginPath();
+  ctx.arc(cx - s * 0.28, cy - s * 0.18, s * 0.34, 0, Math.PI * 2);
+  ctx.arc(cx + s * 0.28, cy - s * 0.18, s * 0.34, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.beginPath();
+  ctx.moveTo(cx - s * 0.52, cy - s * 0.06);
+  ctx.lineTo(cx + s * 0.52, cy - s * 0.06);
+  ctx.lineTo(cx, cy + s * 0.6);
+  ctx.closePath();
+  ctx.fill();
+}
+
+// 绘制单个点点单元格（已找到的淡出；整体沿用「字母连连」的简约配色：白底 + 深棕字 + 浅棕描边）
+function drawDotLetter(l) {
+  const s = l.size;
+  const x = l.x - s;
+  const y = l.y - s;
+  const w = s * 2;
+  const r = Math.min(14, s);
+  ctx.globalAlpha = l.found ? 0.25 : 1;
+  ctx.fillStyle = '#ffffff';
+  roundRectPath(ctx, x, y, w, w, r);
+  ctx.fill();
+  ctx.lineWidth = 2;
+  ctx.strokeStyle = 'rgba(120,80,40,0.18)';
+  roundRectPath(ctx, x, y, w, w, r);
+  ctx.stroke();
+  ctx.fillStyle = '#5a2d00';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.font = 'bold ' + Math.round(s * 1.05) + 'px sans-serif';
+  ctx.fillText(l.display, l.x, l.y);
+  ctx.globalAlpha = 1;
+}
+
 // 拼单词候选字母方块：复用“找字母”掉落字母的同款视觉
 // （彩色圆角方块 + 白字 + 白色描边），保证两处风格统一。
 function drawSpellTile(x, y, size, ch, selected, idx) {
@@ -583,33 +845,37 @@ function drawButton(rect, label) {
   ctx.fillText(label, rect.x + rect.w / 2, rect.y + rect.h / 2);
 }
 
-// 左上角“返回”按钮：轻量圆角白底 + 细线条返回箭头（‹ 形，尖朝左、圆角端点），
-// 贴近微信小程序导航栏返回图标的风格；尺寸小巧，避免与顶部标题重合
+// 左上角“返回”按钮：圆形半透明底 + 主题橙描边 + 橙色 chevron 箭头，
+// 整体更柔和、与暖色橙主题一致，避免原先四方白盒与画面割裂
 function drawBackButton(rect) {
   ctx.save();
-  const r = 10;
-  // 轻量圆角白底（仅作底衬，保证在彩色背景上清晰）
-  ctx.fillStyle = 'rgba(255,255,255,0.9)';
-  roundRectPath(ctx, rect.x, rect.y, rect.w, rect.h, r);
+  const cx = rect.x + rect.w / 2;
+  const cy = rect.y + rect.h / 2;
+  const radius = Math.min(rect.w, rect.h) / 2;
+
+  // 圆形半透明底衬（暖白），在彩色/游戏背景上均清晰
+  ctx.fillStyle = 'rgba(255,255,255,0.82)';
+  ctx.beginPath();
+  ctx.arc(cx, cy, radius, 0, Math.PI * 2);
   ctx.fill();
-  ctx.lineWidth = 1.5;
-  ctx.strokeStyle = 'rgba(90,45,0,0.22)';
-  roundRectPath(ctx, rect.x, rect.y, rect.w, rect.h, r);
+  // 主题橙细描边，呼应选中卡片 / “开始”按钮的橙色
+  ctx.lineWidth = 2;
+  ctx.strokeStyle = 'rgba(255,122,24,0.55)';
+  ctx.beginPath();
+  ctx.arc(cx, cy, radius, 0, Math.PI * 2);
   ctx.stroke();
 
-  // 两段式线条返回箭头（指向左）
-  const cy = rect.y + rect.h / 2;
-  const tipX = rect.x + rect.w * 0.40;        // 顶点（最左）
-  const armX = rect.x + rect.w * 0.62;         // 右端（两臂汇聚的反向点）
-  const armY = rect.h * 0.22;                  // 垂直臂长
-  ctx.strokeStyle = '#5a2d00';
-  ctx.lineWidth = 3;
+  // 左向 chevron（橙色、圆头），与主题统一；以圆中心为基准居中
+  const a = radius * 0.40;            // 箭头半长
+  const ax = cx;                     // 箭头水平中心与圆中心对齐
+  ctx.strokeStyle = '#ff7a18';
+  ctx.lineWidth = 3.2;
   ctx.lineCap = 'round';
   ctx.lineJoin = 'round';
   ctx.beginPath();
-  ctx.moveTo(armX, cy - armY);
-  ctx.lineTo(tipX, cy);
-  ctx.lineTo(armX, cy + armY);
+  ctx.moveTo(ax + a * 0.5, cy - a);
+  ctx.lineTo(ax - a * 0.5, cy);
+  ctx.lineTo(ax + a * 0.5, cy + a);
   ctx.stroke();
   ctx.restore();
 }
@@ -625,40 +891,45 @@ function drawHome() {
   backBtn = { x: 14, y: 14, w: 52, h: 40 };
   drawBackButton(backBtn);
 
-  // 标题：字号随屏宽自适应，并保证不超出屏宽（避免两侧被截）
+  // 标题：字号随屏宽自适应，并保证不超出屏宽
   let titleSize = Math.min(52, W * 0.13);
   ctx.font = 'bold ' + titleSize + 'px sans-serif';
-  let tW = ctx.measureText('字母掉落').width;
+  let tW = ctx.measureText('找字母').width;
   if (tW > W * 0.92) titleSize = Math.floor(titleSize * (W * 0.92) / tW);
   ctx.font = 'bold ' + titleSize + 'px sans-serif';
   ctx.fillStyle = '#5a2d00';
-  ctx.fillText('字母掉落', W / 2, H * 0.28);
+  ctx.fillText('找字母', W / 2, H * 0.16);
 
-  // 副标题：超长时自动缩小以适配屏宽（实测写死 30px 在窄屏会左右截断）
-  const subtitle = '听发音，在字母落地前点中它！';
-  let subSize = Math.min(24, W * 0.06);
-  ctx.font = subSize + 'px sans-serif';
-  let sW = ctx.measureText(subtitle).width;
-  const maxSubW = W * 0.9;
-  if (sW > maxSubW) subSize = Math.floor(subSize * maxSubW / sW);
-  ctx.font = subSize + 'px sans-serif';
   ctx.fillStyle = '#8a5a2b';
-  ctx.fillText(subtitle, W / 2, H * 0.38);
+  ctx.font = Math.min(22, W * 0.055) + 'px sans-serif';
+  ctx.fillText('选择一个玩法', W / 2, H * 0.24);
 
-  // 开始按钮：宽度随屏宽自适应，左右各留边
-  const btnW = Math.min(320, W - 80);
-  startBtn = { x: W / 2 - btnW / 2, y: H * 0.55, w: btnW, h: 80 };
-  drawButton(startBtn, '开始游戏');
+  // 两张玩法卡片：字母掉落 / 字母点点（复用菜单卡片样式，橙色 + 白字 + ›）
+  const cardW = Math.min(360, W - 80);
+  const cardH = 108;
+  const gap = 22;
+  const totalH = cardH * 2 + gap;
+  const startY = H * 0.32;
+  const modes = [
+    { mode: 'drop', title: '字母掉落', sub: '听发音，在落地前点中它' },
+    { mode: 'dot', title: '字母点点', sub: '听发音，限时内清空整屏' },
+  ];
+  homeModeCards = [];
+  modes.forEach((m, i) => {
+    const rect = { x: W / 2 - cardW / 2, y: startY + i * (cardH + gap), w: cardW, h: cardH };
+    homeModeCards.push({ rect, mode: m.mode });
+    drawMenuCard(rect, m.title, m.sub, true, 34);
+  });
 
-  // 最高分：超长自动缩小
-  const bestText = '最高分：' + best;
-  let bestSize = 24;
+  // 最高分（两种玩法分别记录）
+  const bestText = '最高分　掉落 ' + best + '　·　点点 ' + dotBest;
+  let bestSize = 22;
   ctx.font = bestSize + 'px sans-serif';
   let bW = ctx.measureText(bestText).width;
-  if (bW > W * 0.9) bestSize = Math.floor(bestSize * (W * 0.9) / bW);
+  if (bW > W * 0.92) bestSize = Math.floor(bestSize * (W * 0.92) / bW);
   ctx.font = bestSize + 'px sans-serif';
   ctx.fillStyle = '#b06a2b';
-  ctx.fillText(bestText, W / 2, H * 0.75);
+  ctx.fillText(bestText, W / 2, startY + totalH + 34);
 }
 
 // 绘制导航页（模式选择）：找字母（由 FIND_LETTER_ENABLED 决定，关闭时置灰显示「即将到来」）/ 拼单词（可点）
@@ -844,13 +1115,16 @@ function drawGameOver() {
   ctx.textBaseline = 'middle';
 
   // 标题：字号随屏宽自适应，保证不超出屏宽
+  let overTitle = (lastMode === 'dot')
+    ? (dotEndReason === 'win' ? '闯关成功' : (dotEndReason === 'timeout' ? '时间到' : '游戏结束'))
+    : '游戏结束';
   let overTitleSize = Math.min(48, W * 0.13);
   ctx.font = 'bold ' + overTitleSize + 'px sans-serif';
-  let otW = ctx.measureText('游戏结束').width;
+  let otW = ctx.measureText(overTitle).width;
   if (otW > W * 0.92) overTitleSize = Math.floor(overTitleSize * (W * 0.92) / otW);
   ctx.font = 'bold ' + overTitleSize + 'px sans-serif';
   ctx.fillStyle = '#5a2d00';
-  ctx.fillText('游戏结束', W / 2, H * 0.3);
+  ctx.fillText(overTitle, W / 2, H * 0.3);
 
   ctx.fillStyle = '#ff7a18';
   ctx.font = 'bold 36px sans-serif';
@@ -858,7 +1132,7 @@ function drawGameOver() {
 
   ctx.fillStyle = '#8a5a2b';
   ctx.font = '28px sans-serif';
-  ctx.fillText('最高分 ' + best, W / 2, H * 0.5);
+  ctx.fillText('最高分 ' + (lastMode === 'dot' ? dotBest : best), W / 2, H * 0.5);
 
   restartBtn = { x: W / 2 - 160, y: H * 0.62, w: 320, h: 80 };
   drawButton(restartBtn, '再来一局');
@@ -1102,7 +1376,8 @@ function drawChapter() {
   });
 }
 
-// 模式选择页：单元点击后先选“听音拼单词 / 中文转单词”再进入练习
+// 模式选择页：单元点击后先到本页，再选「单词拼写 / 全部单词 / 对对碰 / 字母连连 / 单词听写」
+// 其中「单词拼写」进入二级配置页（spellConfig），内嵌练习方式与干扰强度选择
 function drawSpellMode() {
   ctx.fillStyle = bgGrad;
   ctx.fillRect(0, 0, W, H);
@@ -1120,15 +1395,14 @@ function drawSpellMode() {
   ctx.fillStyle = '#5a2d00';
   ctx.fillText('选择练习模式', W / 2, H * 0.15);
 
-  // 模式卡片（上下排布：听音拼单词 / 中文转单词 / 全部单词 / 对对碰 / 字母连连）
+  // 模式卡片（上下排布）：单词拼写（二级）/ 单词听写 / 全部单词 / 对对碰 / 字母连连
   const cardW = Math.min(360, W - 80);
   const modes = [
-    { mode: 'listen', title: '听音拼单词', sub: '听发音，拼出单词' },
-    { mode: 'cn', title: '中文转单词', sub: '看中文意思，拼出单词' },
+    { mode: 'spell', title: '单词拼写', sub: '听音 / 看中文，拼出单词' },
+    { mode: 'dict', title: '单词听写', sub: '按节奏听发音，写单词' },
     { mode: 'words', title: '全部单词', sub: '浏览本单元所有单词' },
     { mode: 'match', title: '单词对对碰', sub: '点英文卡听发音，英中配对消除' },
     { mode: 'link', title: '字母连连', sub: '拖动字母连成单词' },
-    { mode: 'dict', title: '单词听写', sub: '按节奏听发音，写单词' },
   ];
   const n = modes.length;
   // 卡片高度自适应：卡数越多越收紧间距与最小高度，保证小屏也能完整放下（不溢出）
@@ -1146,71 +1420,180 @@ function drawSpellMode() {
   });
 }
 
-// 干扰强度选择页：从听音拼单词 / 中文转单词进入时先弹此页，手动选「无干扰 / 一倍字母干扰 / 两倍字母干扰」
-function enterSpellDistractSel(mode) {
-  spellDistractSelMode = (mode === 'cn') ? 'cn' : 'listen';
-  state = 'spellDistractSel';
+// 单词拼写配置页（spellConfig）：练习方式（听音拼单词 / 中文转单词）+ 干扰强度（无 / 一倍 / 两倍）
+// 合并在二级页，取代原先「进入前单独选难度」的第三层页面。
+function enterSpellConfig() {
+  state = 'spellConfig';
 }
 
-function drawSpellDistractSel() {
+// 字母点点二级页（dotConfig）：选择单局总用时 30 / 60 / 90 / 120 秒后进入游戏
+function enterDotConfig() {
+  state = 'dotConfig';
+}
+
+// 字母点点二级页：2×2 时间选项 + 开始按钮（沿用配置页单选卡片与开始按钮的同族视觉）
+function drawDotConfig() {
   ctx.fillStyle = bgGrad;
   ctx.fillRect(0, 0, W, H);
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
 
+  // 左上角返回按钮：回到找字母主页
+  dotConfigBack = { x: 14, y: 14, w: 52, h: 40 };
+  drawBackButton(dotConfigBack);
+
+  // 标题
+  ctx.fillStyle = '#5a2d00';
+  ctx.font = 'bold ' + Math.min(32, W * 0.085) + 'px sans-serif';
+  ctx.fillText('字母点点', W / 2, H * 0.10);
+  ctx.fillStyle = '#b06a2b';
+  ctx.font = Math.min(18, W * 0.05) + 'px sans-serif';
+  ctx.fillText('选择单局用时，限时内清空整屏字母', W / 2, H * 0.155);
+
+  const cardW = Math.min(360, W - 80);
+  dotConfigOpts = [];
+
+  // 2×2 时间选项（30 / 60 / 90 / 120 秒），选中态橙色实心
+  const times = [
+    { ms: 30000, title: '30 秒', sub: '高难度' },
+    { ms: 60000, title: '60 秒', sub: '中等' },
+    { ms: 90000, title: '90 秒', sub: '轻松' },
+    { ms: 120000, title: '120 秒', sub: '休闲' },
+  ];
+  const gGap = 16, mW = (cardW - gGap) / 2, mH = 84;
+  // 统一字号：以较窄的时间为基准计算，保证四张卡字号一致
+  let titleFs = Math.min(30, mH * 0.42);
+  ctx.font = 'bold ' + titleFs + 'px sans-serif';
+  const maxModeW = mW - 28;
+  const widestMode = ctx.measureText('120 秒').width;
+  if (widestMode > maxModeW) titleFs = Math.floor(titleFs * maxModeW / widestMode);
+  const gx = W / 2 - cardW / 2, gy = H * 0.26;
+  times.forEach((t, i) => {
+    const col = i % 2, row = Math.floor(i / 2);
+    const rect = { x: gx + col * (mW + gGap), y: gy + row * (mH + gGap), w: mW, h: mH };
+    dotConfigOpts.push({ rect, ms: t.ms });
+    drawSelectCard(rect, t.title, t.sub, dotTimeSel === t.ms, titleFs);
+  });
+
+  // 开始按钮：与上方选项同族（圆角 16、实心橙、白字居中）
+  const btnH = 58;
+  dotConfigStart = { x: W / 2 - cardW / 2, y: gy + 2 * (mH + gGap) + 24, w: cardW, h: btnH };
+  ctx.fillStyle = '#ff7a18';
+  roundRectPath(ctx, dotConfigStart.x, dotConfigStart.y, dotConfigStart.w, dotConfigStart.h, 16);
+  ctx.fill();
+  ctx.fillStyle = '#ffffff';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.font = 'bold 30px sans-serif';
+  ctx.fillText('开始', dotConfigStart.x + dotConfigStart.w / 2, dotConfigStart.y + dotConfigStart.h / 2);
+}
+
+// 单选卡片：选中态橙色实心 + 右侧对勾；未选中态白底橙边
+function drawSelectCard(rect, title, sub, active, titleFs) {
+  ctx.fillStyle = active ? '#ff7a18' : 'rgba(255,255,255,0.97)';
+  roundRectPath(ctx, rect.x, rect.y, rect.w, rect.h, 16);
+  ctx.fill();
+  ctx.lineWidth = 2;
+  ctx.strokeStyle = active ? 'rgba(255,255,255,0.6)' : 'rgba(255,122,24,0.5)';
+  roundRectPath(ctx, rect.x, rect.y, rect.w, rect.h, 16);
+  ctx.stroke();
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillStyle = active ? '#ffffff' : '#5a2d00';
+  // 标题字号：未传入时按卡片高估算；传入则统一用页面级 titleFs，保证上下两排字号一致
+  let fs = (titleFs !== undefined) ? titleFs : Math.min(30, rect.h * 0.5);
+  ctx.font = 'bold ' + fs + 'px sans-serif';
+  const maxTitleW = rect.w - 28;
+  const tw = ctx.measureText(title).width;
+  if (tw > maxTitleW) {
+    fs = Math.floor(fs * maxTitleW / tw);
+    ctx.font = 'bold ' + fs + 'px sans-serif';
+  }
+  if (sub) {
+    const titleY = rect.y + rect.h / 2 - rect.h * 0.13;
+    ctx.fillText(title, rect.x + rect.w / 2, titleY);
+    ctx.fillStyle = active ? 'rgba(255,255,255,0.92)' : '#9a6a3a';
+    const subFs = Math.min(18, rect.h * 0.3);
+    ctx.font = subFs + 'px sans-serif';
+    ctx.fillText(sub, rect.x + rect.w / 2, rect.y + rect.h / 2 + rect.h * 0.2);
+  } else {
+    ctx.fillText(title, rect.x + rect.w / 2, rect.y + rect.h / 2);
+  }
+}
+
+function drawSpellConfig() {
+  ctx.fillStyle = bgGrad;
+  ctx.fillRect(0, 0, W, H);
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
 
   // 左上角返回按钮：回到模式选择页
-  spellDistractSelBack = { x: 14, y: 14, w: 52, h: 40 };
-  drawBackButton(spellDistractSelBack);
+  spellConfigBack = { x: 14, y: 14, w: 52, h: 40 };
+  drawBackButton(spellConfigBack);
 
-  // 标题：当前模式 + 选择干扰强度
+  // 标题
   ctx.fillStyle = '#5a2d00';
-  ctx.font = 'bold ' + Math.min(30, W * 0.08) + 'px sans-serif';
-  ctx.fillText(spellDistractSelMode === 'cn' ? '中文转单词' : '听音拼单词', W / 2, H * 0.13);
+  ctx.font = 'bold ' + Math.min(32, W * 0.085) + 'px sans-serif';
+  ctx.fillText('单词拼写', W / 2, H * 0.10);
   ctx.fillStyle = '#b06a2b';
-  ctx.font = Math.min(20, W * 0.055) + 'px sans-serif';
-  ctx.fillText('选择干扰强度', W / 2, H * 0.19);
+  ctx.font = Math.min(18, W * 0.05) + 'px sans-serif';
+  ctx.fillText('选择练习方式与干扰强度', W / 2, H * 0.155);
 
-  // 三个选项卡片（上下排布、居中）：无干扰 / 一倍字母干扰 / 两倍字母干扰
-  const opts = [
+  const cardW = Math.min(360, W - 80);
+  spellConfigOpts = [];
+
+  // 练习方式：两张并列卡片（听音拼单词 / 中文转单词）
+  ctx.textAlign = 'left';
+  ctx.fillStyle = '#8a5a2b';
+  ctx.font = 'bold ' + Math.min(18, W * 0.05) + 'px sans-serif';
+  ctx.fillText('练习方式', 14 + (W - cardW) / 2, H * 0.215);
+  ctx.textAlign = 'center';
+  const mGap = 14, mW = (cardW - mGap) / 2, mY = H * 0.245, mH = 62;
+  // 统一两排标题字号：以较窄的“练习方式”卡片为基准计算，保证上下两排字号一致（不再因宽度被各自压缩而大小不一）
+  let titleFs = Math.min(28, mH * 0.46);
+  ctx.font = 'bold ' + titleFs + 'px sans-serif';
+  const maxModeW = mW - 28;
+  const widestMode = ctx.measureText('听音拼单词').width;
+  if (widestMode > maxModeW) titleFs = Math.floor(titleFs * maxModeW / widestMode);
+  const modes = [
+    { value: 'listen', title: '听音拼单词', sub: '听发音拼' },
+    { value: 'cn', title: '中文转单词', sub: '看中文拼' },
+  ];
+  modes.forEach((m, i) => {
+    const rect = { x: W / 2 - cardW / 2 + i * (mW + mGap), y: mY, w: mW, h: mH };
+    spellConfigOpts.push({ rect, kind: 'mode', value: m.value });
+    drawSelectCard(rect, m.title, m.sub, spellConfigMode === m.value, titleFs);
+  });
+
+  // 干扰强度：三张上下卡片（无干扰 / 一倍字母干扰 / 两倍字母干扰）
+  ctx.textAlign = 'left';
+  ctx.fillStyle = '#8a5a2b';
+  ctx.font = 'bold ' + Math.min(18, W * 0.05) + 'px sans-serif';
+  ctx.fillText('干扰强度', 14 + (W - cardW) / 2, H * 0.40);
+  ctx.textAlign = 'center';
+  const dY = H * 0.435, dH = 58, dGap = 10;
+  const diffs = [
     { level: 0, title: '无干扰', sub: '只用单词本身字母' },
     { level: 1, title: '一倍字母干扰', sub: '额外混入 1×词长 的字母' },
     { level: 2, title: '两倍字母干扰', sub: '额外混入 2×词长 的字母' },
   ];
-  const cardW = Math.min(360, W - 80);
-  const n = opts.length;
-  const gap = 16;
-  const cardH = 76;
-  const totalH = n * cardH + (n - 1) * gap;
-  const startY = Math.max(H * 0.28, (H - totalH) / 2);
-
-  spellDistractSelOpts = [];
-  opts.forEach((o, i) => {
-    const rect = { x: W / 2 - cardW / 2, y: startY + i * (cardH + gap), w: cardW, h: cardH };
-    spellDistractSelOpts.push({ rect, level: o.level });
-    const active = (spellDistractLevel === o.level);
-    ctx.fillStyle = active ? 'rgba(255,224,196,0.98)' : 'rgba(255,255,255,0.97)';
-    roundRectPath(ctx, rect.x, rect.y, rect.w, rect.h, 18);
-    ctx.fill();
-    ctx.lineWidth = active ? 3 : 2;
-    ctx.strokeStyle = active ? 'rgba(255,122,24,0.9)' : 'rgba(255,122,24,0.4)';
-    roundRectPath(ctx, rect.x, rect.y, rect.w, rect.h, 18);
-    ctx.stroke();
-    ctx.textAlign = 'left';
-    ctx.fillStyle = '#5a2d00';
-    ctx.font = 'bold ' + Math.min(26, cardH * 0.34) + 'px sans-serif';
-    ctx.fillText(o.title, rect.x + 24, rect.y + cardH * 0.38);
-    ctx.fillStyle = '#9a6a3a';
-    ctx.font = Math.min(17, cardH * 0.22) + 'px sans-serif';
-    ctx.fillText(o.sub, rect.x + 24, rect.y + cardH * 0.72);
-    if (active) {
-      ctx.fillStyle = 'rgba(255,122,24,0.95)';
-      ctx.beginPath();
-      ctx.arc(rect.x + rect.w - 30, rect.y + cardH / 2, 9, 0, Math.PI * 2);
-      ctx.fill();
-    }
+  diffs.forEach((o, i) => {
+    const rect = { x: W / 2 - cardW / 2, y: dY + i * (dH + dGap), w: cardW, h: dH };
+    spellConfigOpts.push({ rect, kind: 'level', value: o.level });
+    drawSelectCard(rect, o.title, o.sub, spellDistractLevel === o.level, titleFs);
   });
+
+  // 开始按钮：与上方选项同族（圆角 16、实心橙、白字居中），作为进入动作的确认
+  const btnH = 58;
+  spellConfigStart = { x: W / 2 - cardW / 2, y: dY + 3 * (dH + dGap) + 18, w: cardW, h: btnH };
+  ctx.fillStyle = '#ff7a18';
+  roundRectPath(ctx, spellConfigStart.x, spellConfigStart.y, spellConfigStart.w, spellConfigStart.h, 16);
+  ctx.fill();
+  ctx.fillStyle = '#ffffff';
   ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.font = 'bold 30px sans-serif';
+  ctx.fillText('开始', spellConfigStart.x + spellConfigStart.w / 2, spellConfigStart.y + spellConfigStart.h / 2);
 }
 
 // 单词表查阅页：列出该单元（或全部章节）下的所有单词，提供中英文与发音喇叭
@@ -2097,14 +2480,16 @@ function draw() {
   if (state === 'nav') drawNav();
   else if (state === 'home') drawHome();
   else if (state === 'playing') drawPlaying();
-  else if (state === 'confirmExit') { drawPlaying(); drawExitConfirm(); }
+  else if (state === 'dotMode') drawDot();
+  else if (state === 'confirmExit') { if (lastMode === 'dot') drawDot(); else drawPlaying(); drawExitConfirm(); }
   else if (state === 'gameover') drawGameOver();
   else if (state === 'grade') drawGrade();
   else if (state === 'loading') drawLoading();
   else if (state === 'loadFail') drawLoadFail();
   else if (state === 'chapter') drawChapter();
   else if (state === 'spellMode') drawSpellMode();
-  else if (state === 'spellDistractSel') drawSpellDistractSel();
+  else if (state === 'spellConfig') drawSpellConfig();
+  else if (state === 'dotConfig') drawDotConfig();
   else if (state === 'spell') drawSpell();
   else if (state === 'wordList') drawWordList();
   else if (state === 'match') drawMatch();
@@ -2405,23 +2790,33 @@ adapter.onTouchStart((e) => {
     if (hit(spellModeBackBtn, px, py)) { state = 'chapter'; chapterScrollY = 0; return; }
     for (const item of spellModeCards) {
       if (hit(item.rect, px, py)) {
-        if (item.mode === 'words') enterWordList(spellChapterId);
+        if (item.mode === 'spell') enterSpellConfig();
+        else if (item.mode === 'words') enterWordList(spellChapterId);
         else if (item.mode === 'match') startMatch(spellChapterId);
         else if (item.mode === 'link') startLink(spellChapterId);
         else if (item.mode === 'dict') startDictation(spellChapterId);
-        else enterSpellDistractSel(item.mode);
         return;
       }
     }
-  } else if (state === 'spellDistractSel') {
-    if (hit(spellDistractSelBack, px, py)) { state = 'spellMode'; return; }
-    for (const opt of spellDistractSelOpts) {
+  } else if (state === 'spellConfig') {
+    if (hit(spellConfigBack, px, py)) { state = 'spellMode'; return; }
+    for (const opt of spellConfigOpts) {
       if (hit(opt.rect, px, py)) {
-        spellDistractLevel = opt.level;          // 选定干扰强度后进入拼写
-        startSpellChapter(spellChapterId, spellDistractSelMode);
+        if (opt.kind === 'mode') spellConfigMode = opt.value;
+        else spellDistractLevel = opt.value;
         return;
       }
     }
+    if (spellConfigStart && hit(spellConfigStart, px, py)) {
+      startSpellChapter(spellChapterId, spellConfigMode);
+      return;
+    }
+  } else if (state === 'dotConfig') {
+    if (hit(dotConfigBack, px, py)) { state = 'home'; return; } // 返回找字母主页
+    for (const opt of dotConfigOpts) {
+      if (hit(opt.rect, px, py)) { dotTimeSel = opt.ms; return; } // 选定时长
+    }
+    if (dotConfigStart && hit(dotConfigStart, px, py)) { startDot(); return; } // 开始游戏
   } else if (state === 'match') {
     if (hit(matchBackBtn, px, py)) { state = 'spellMode'; return; }
     if (matchDone) { state = 'spellMode'; return; }   // 完成态点任意处返回
@@ -2490,24 +2885,37 @@ adapter.onTouchStart((e) => {
     }
   } else if (state === 'home') {
     if (hit(backBtn, px, py)) { state = 'nav'; return; }
-    if (hit(startBtn, px, py)) startGame();
+    for (const m of homeModeCards) {
+      if (hit(m.rect, px, py)) {
+        if (m.mode === 'drop') startGame(); else enterDotConfig();
+        return;
+      }
+    }
   } else if (state === 'gameover') {
     if (hit(backBtn, px, py)) { state = 'nav'; return; }
-    if (hit(restartBtn, px, py)) startGame();
+    if (hit(restartBtn, px, py)) { if (lastMode === 'dot') startDot(); else startGame(); }
   } else if (state === 'playing') {
     if (hit(exitBtn, px, py)) { state = 'confirmExit'; return; } // 发起退出 -> 弹框确认
     onTapLetter(px, py);
+  } else if (state === 'dotMode') {
+    if (hit(dotExitBtn, px, py)) { state = 'confirmExit'; return; } // 发起退出 -> 弹框确认
+    onTapDot(px, py);
   } else if (state === 'confirmExit') {
     if (hit(exitConfirmBtn, px, py)) {
       // 确定退出：保存最高分并返回导航页
-      best = Math.max(best, score);
-      adapter.setStorageSync('letterdrop_best', best);
+      if (lastMode === 'dot') {
+        dotBest = Math.max(dotBest, score);
+        adapter.setStorageSync('letterdot_best', dotBest);
+      } else {
+        best = Math.max(best, score);
+        adapter.setStorageSync('letterdrop_best', best);
+      }
       state = 'nav';
       return;
     }
     if (hit(exitCancelBtn, px, py)) {
-      // 继续游戏：解除暂停
-      state = 'playing';
+      // 继续游戏：解除暂停（恢复到对应玩法）
+      state = (lastMode === 'dot') ? 'dotMode' : 'playing';
       lastTime = Date.now();
       return;
     }
