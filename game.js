@@ -571,7 +571,7 @@ function drawLetter(l) {
   ctx.fillStyle = '#ffffff';
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
-  ctx.font = 'bold ' + Math.round(s * 1.05) + 'px sans-serif';
+  ctx.font = 'bold ' + Math.round(s * 1.05) + 'px ' + (SPELL_FONT || 'sans-serif');
   ctx.fillText(l.display, l.x, l.y);
 }
 
@@ -794,7 +794,7 @@ function drawDotLetter(l) {
   ctx.fillStyle = '#5a2d00';
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
-  ctx.font = 'bold ' + Math.round(s * 1.05) + 'px sans-serif';
+  ctx.font = 'bold ' + Math.round(s * 1.05) + 'px ' + (SPELL_FONT || 'sans-serif');
   ctx.fillText(l.display, l.x, l.y);
   ctx.globalAlpha = 1;
 }
