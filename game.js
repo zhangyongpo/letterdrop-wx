@@ -25,6 +25,7 @@ const {
 const adapter = require('./platform/adapter');
 const { buildPath: linkBuildPath } = require('./utils/link');
 const { buildDictParts, wrapIndex } = require('./utils/dictation');
+const progress = require('./utils/progress');
 
 // 英文印刷体（Andika，SIL 出品，OFL 开源可商用），专为初学者识字设计，字母形态清晰规范，
 // 小写 a/g 为课本标准双体结构，最贴近小学英语书写印刷体。用于拼单词页。
@@ -90,6 +91,17 @@ const sys = (adapter.getWindowInfo ? adapter.getWindowInfo() : adapter.getSystem
 const dpr = sys.pixelRatio || 2;
 const W = sys.windowWidth || sys.screenWidth || 320;
 const H = sys.windowHeight || sys.screenHeight || 568;
+// 全面屏安全区：底部小黑条(home indicator)与顶部状态栏/刘海的避让距离(逻辑像素)。
+// 从 safeArea 推导（safeArea.bottom 是距屏幕顶部的安全区下沿，故底部 inset = H - bottom）。
+// 部分基础库/模拟器不返回 safeArea，此时退化为 0，不改变旧有布局。
+const SA = sys.safeArea || null;
+const SAFE_TOP = SA && typeof SA.top === 'number' ? Math.max(0, SA.top) : 0;
+const SAFE_BOTTOM = SA && typeof SA.bottom === 'number' ? Math.max(0, H - SA.bottom) : 0;
+// 内容区上下沿：各页面贴边元素以这两个值为基准，避免被状态栏/小黑条遮挡。
+const CONTENT_TOP = SAFE_TOP;
+const CONTENT_BOTTOM = H - SAFE_BOTTOM;
+// 滚动列表底部的统一留白（避开小黑条），draw 与 onTouchMove 共用，保证点击区与绘制一致。
+const LIST_BOTTOM = CONTENT_BOTTOM - 20;
 canvas.width = W * dpr;
 canvas.height = H * dpr;
 ctx.scale(dpr, dpr);
@@ -103,7 +115,8 @@ bgGrad.addColorStop(1, '#ffe0b2');
 // state: 'nav' | 'home' | 'playing' | 'dotMode' | 'gameover' | 'confirmExit'
 //         | 'grade' | 'loading' | 'loadFail' | 'chapter' | 'spellMode'
 //         | 'spellConfig' | 'spell' | 'wordList' | 'match' | 'link' | 'dictation'
-//         | 'dotConfig'
+//         | 'dotConfig' | 'progress'
+//   progress    —— 错词本 + 学习统计（错词复习 / 清除记录）
 //   nav         —— 模式选择导航页（找字母 / 拼单词 两个模式均可进入）
 //   home        —— 找字母模式主页（两张卡片：字母掉落 / 字母点点，由 FIND_LETTER_ENABLED 控制是否开放）
 //   playing     —— 找字母·字母掉落 游戏中
@@ -169,6 +182,12 @@ let gradeScrollY = 0;            // 一级菜单滚动偏移（册数变多后�
 let gradePendingCard = null;     // 按下时命中的册 id，抬手且未拖动才真正进入
 let gradeTouchStartY = 0;        // 按下时的 Y，用于区分点击与滑动
 let gradeTouchMoved = false;     // 是否已判定为滑动
+
+// ---- 章节列表触摸（沿用年级页「抬手未滑动才进入」，避免滑动误触跳页）----
+let chapterPendingCard = null;   // 按下时命中的章节 id，抬手且未拖动才进入
+let chapterTouchStartY = 0;      // 按下时的 Y
+let chapterTouchMoved = false;   // 是否已判定为滑动
+
 let pendingGradeId = 'g3';       // 正在下载 / 下载失败的年级
 let loadingProgress = 0;         // 分包下载进度 0~100
 let loadingGradeName = '';       // 正在下载的年级名
@@ -185,8 +204,12 @@ let spellMeaning = '';           // 当前单词中文释义
 let spellCandidates = [];        // 候选字母 [{ch, selected}]
 let spellOrder = [];             // 已选字母对应的候选下标顺序
 let spellSolved = false;         // 当前单词是否已拼对（显示弹框）
+let spellWrongPos = -1;          // 输入已满但不匹配时，首个错位字母的位置（-1 表示无）；用于纠错高亮
+let spellWrongRecorded = false;  // 本词是否已记入错词本（避免同一词重复累加）
+let spellFromReview = false;     // 本次拼写是否为「错词复习」（结束后回错词本）
 let spellBackBtn = null;         // 拼写页返回按钮（左上角）
 let spellSpeakerBtn = null;      // 拼写页小喇叭按钮（底部）
+let spellReadBtn = null;         // 拼写页「读字母」喇叭按钮（底部与听发音喇叭并排，逐字母拼读当前单词）
 // 干扰强度（单词拼写配置页选择）：0=无干扰，1=一倍字母干扰，2=两倍字母干扰
 let spellDistractLevel = 1;      // 默认一倍字母干扰
 // 单词拼写配置页（spellConfig）：练习方式 + 干扰强度合并在一页，取代原先「进入前单独选难度」的第三层
@@ -204,11 +227,20 @@ let wordListItems = [];          // 单词列表：{ en, cn }
 let wordListScrollY = 0;         // 列表滚动偏移
 let wordListBackBtn = null;      // 返回按钮（左上角）
 let wordListSpeakers = [];       // 每行喇叭按钮：{ rect, word }
+let wordListReadBtns = [];        // 每行「读字母」喇叭按钮：{ rect, word }
 let spellTileRects = [];         // 候选字母方块的可点击区域（{x,y,w,h} 左上角）
 let spellChapterId = '';         // 当前选中的章节 id（模式选择页进入时用）
 let spellMode = 'listen';        // 拼写模式：'listen' 听音拼单词 / 'cn' 中文转单词
 let spellModeCards = [];         // 模式选择页两张卡片区域（{rect, mode}）
 let spellModeBackBtn = null;     // 模式选择页返回按钮（左上角）
+
+// 错词本 / 学习统计页
+let progressBackBtn = null;      // 返回键
+let progressReviewBtn = null;    // “复习错词”按钮
+let progressClearBtn = null;     // “清除记录”按钮
+let progressScrollY = 0;         // 错词列表滚动偏移
+let progressListTop = 0, progressListBottom = 0;
+let progressClearArmed = false;  // 清除需二次点击确认（防误触）
 
 // ---- 单词对对碰（match）相关状态 ----
 let matchBlocks = [];            // 棋盘块：{x,y,w,h,text,type:'en'|'cn',pairId,word,removed}，word 为该卡对应英文词条
@@ -253,6 +285,7 @@ let linkListContentH = 0;          // 释义列表内容总高（含折行）
 let linkListScrollY = 0;           // 释义列表滚动偏移
 let linkListDragging = false;      // 是否正在拖动释义列表（与网格连线互斥）
 let linkListLastY = null;          // 拖动释义列表时的上一个触点 Y
+let linkTargetSpeakers = [];       // 目标词行的小喇叭 [{rect, word}]，点击念该词（连线前听音输入）
 
 // ---- 单词听写（dictation）相关状态 ----
 // 按玩家选定的间隔自动翻词并循环；中文→英 / 只英文 / 英→中文 / 只中文四种模式只控制「发音内容与顺序」，
@@ -269,6 +302,13 @@ let dictPrevBtn = null;
 let dictNextBtn = null;
 let dictPlayBtn = null;
 let dictCardRect = null;
+let dictAnswerTiles = [];          // 作答字母块 [{rect, ch, idx, selected}]
+let dictAnswerOrder = [];          // 已选字母块下标顺序
+let dictSolved = false;            // 本词是否已拼对
+let dictWrongPos = -1;             // 首个错位位置（标红）
+let dictWrongRecorded = false;     // 本词是否已记错词
+let dictQuizOpen = false;          // 是否打开作答弹层
+let dictQuizBtns = {};             // 作答弹层按钮区域 {speak, reveal, next, yes, no}
 let dictModeBtns = [];             // [{rect, mode}]
 let dictIntervalBtns = [];         // [{rect, idx}]
 let dictChapterName = '';
@@ -368,7 +408,10 @@ function endGame() {
 function buildCandidates(word, level) {
   const need = word.split('');              // 已含单词内的重复字母
   const n = need.length;
-  const extra = n * level;                   // 干扰字母数量 = level × 词长
+  // 干扰字母数 = level × 词长；但候选总数封顶 30（5列×6行），
+  // 超长词 + 两倍干扰时不让候选溢出屏幕（否则所需字母可能落在屏幕外导致该题无解）。
+  const CAP = 30;
+  const extra = Math.max(0, Math.min(n * level, CAP - n));
   const pool = need.slice();
   const alpha = 'abcdefghijklmnopqrstuvwxyz';
   let guard = 0;
@@ -387,12 +430,15 @@ function loadSpellWord(i) {
   spellCandidates = buildCandidates(spellWord, spellDistractLevel);
   spellOrder = [];
   spellSolved = false;
+  spellWrongPos = -1;
+  spellWrongRecorded = false;
 }
 
 // 进入某章节的拼写练习
 function startSpellChapter(chapterId, mode) {
   const ch = SPELL_CHAPTERS.find((c) => c.id === chapterId);
   if (!ch) return;
+  spellFromReview = false;
   spellChapterName = ch.name;
   spellMode = (mode === 'cn') ? 'cn' : 'listen';   // 默认听音模式
   let words;
@@ -451,8 +497,13 @@ function enterWordList(chapterId) {
 function nextSpellWord() {
   spellIndex += 1;
   if (spellIndex >= spellList.length) {
-    state = 'chapter';
-    chapterScrollY = 0;
+    if (spellFromReview) {
+      state = 'progress';
+      progressClearArmed = false;
+    } else {
+      state = 'chapter';
+      chapterScrollY = 0;
+    }
     return;
   }
   loadSpellWord(spellIndex);
@@ -478,7 +529,25 @@ function toggleCandidate(idx) {
   const input = spellOrder.map((i) => spellCandidates[i].ch).join('');
   if (input === spellWord) {
     spellSolved = true;
+    spellWrongPos = -1;
+    progress.recordCorrect(currentGradeId, spellWord, spellMeaning); // 记录一次正确作答
     if (spellMode === 'listen') speakWord(spellWord); // 仅听音模式在拼对后播一遍真实发音强化记忆
+  } else if (input.length === spellWord.length) {
+    // 输入已占满但仍不匹配：高亮首个错位字母，并轻声念出「正确字母」作提示，避免盲试。
+    let pos = -1;
+    for (let i = 0; i < input.length; i++) {
+      if (input[i] !== spellWord[i]) { pos = i; break; }
+    }
+    if (!spellWrongRecorded) {
+      spellWrongRecorded = true;
+      progress.recordWrong(currentGradeId, spellWord, spellMeaning); // 本词首次拼错记入错词本
+    }
+    if (pos !== spellWrongPos) {
+      spellWrongPos = pos;
+      announceLetter(spellWord[pos], 500); // 念出该位置应有的字母，作为听觉提示
+    }
+  } else {
+    spellWrongPos = -1;  // 未满时不纠错，允许继续调整
   }
 }
 
@@ -603,7 +672,7 @@ function startDot() {
 // 铺满一个屏幕：网格布局，选 K∈[10,20] 种字母，每种随机个数（合计铺满网格），
 // 单元格大小写随机显示；匹配按字母（不区分大小写，沿用掉落玩法规则）。
 function dotFillScreen() {
-  const topReserve = 112;        // 顶部留给分数 / 倒计时条 / 退出按钮
+  const topReserve = 152;        // 顶部留给得分 / 剩余时间 / 生命 / 进度条 / 退出与重听按钮（并避开微信胶囊）
   const bottomPad = 12;
   const availH = H - topReserve - bottomPad;
   let cols = Math.max(5, Math.min(8, Math.round(W / 92)));
@@ -685,9 +754,15 @@ function onTapDot(px, py) {
         scoreBumpTimer = 250;
         if (score > dotBest) { dotBest = score; adapter.setStorageSync('letterdot_best', dotBest); }
       } else {
-        dotWin = false;
-        dotEndReason = 'dead';      // 点错 -> 扣 1 生命（耗尽则失败）
-        loseLife();
+        // 点错 -> 扣 1 生命，并锁定该格 1 秒：避免对同一格快速连点导致连锁扣命、瞬间掉光 3 条命。
+        const now = Date.now();
+        if (now >= (l.wrongLockUntil || 0)) {
+          l.wrongLockUntil = now + 1000;
+          l.wrongFlashUntil = now + 400;   // 视觉反馈：短暂标红
+          dotWin = false;
+          dotEndReason = 'dead';
+          loseLife();
+        }
       }
       return;
     }
@@ -703,28 +778,28 @@ function drawDot() {
   ctx.textBaseline = 'middle';
   for (const l of dotLetters) drawDotLetter(l);
 
-  // 顶部得分（带 +分 放大动画）
+  // 顶部得分（带 +分 放大动画）—— 居中，避开右上角微信胶囊
   const bump = scoreBumpTimer > 0 ? 1.3 : 1;
   ctx.save();
-  ctx.translate(W / 2, 40);
+  ctx.translate(W / 2, 40 + SAFE_TOP);
   ctx.scale(bump, bump);
   ctx.fillStyle = '#ff7a18';
   ctx.font = 'bold 36px sans-serif';
   ctx.fillText('得分 ' + score, 0, 0);
   ctx.restore();
 
-  // 剩余时间（右侧，与得分同行；不足 5 秒变红）
-  ctx.textAlign = 'right';
+  // 剩余时间：移到居中、得分下方，彻底离开右上角胶囊区；不足 5 秒变红
+  ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
   ctx.fillStyle = dotTimeLeft < 5000 ? '#c0392b' : '#8a5a2b';
-  ctx.font = 'bold 26px sans-serif';
-  ctx.fillText(Math.ceil(dotTimeLeft / 1000) + 's', W - 24, 40);
+  ctx.font = 'bold 22px sans-serif';
+  ctx.fillText('剩余 ' + Math.ceil(dotTimeLeft / 1000) + ' 秒', W / 2, 72 + SAFE_TOP);
 
   // 生命值（爱心，居中）
-  drawHearts(W / 2, 80, lives);
+  drawHearts(W / 2, 100 + SAFE_TOP, lives);
 
   // 单局总用时进度条（剩余比例；最后 20% 变红）
-  const bw = W - 60, bx = 30, by = 98, bh = 10;
+  const bw = W - 60, bx = 30, by = 126 + SAFE_TOP, bh = 10;
   ctx.fillStyle = 'rgba(255,255,255,0.5)';
   roundRectPath(ctx, bx, by, bw, bh, bh / 2);
   ctx.fill();
@@ -734,7 +809,7 @@ function drawDot() {
   ctx.fill();
 
   // 左上角“退出”按钮
-  dotExitBtn = { x: 20, y: 20, w: 84, h: 44 };
+  dotExitBtn = { x: 20, y: 16 + SAFE_TOP, w: 84, h: 44 };
   ctx.fillStyle = 'rgba(255,255,255,0.85)';
   roundRectPath(ctx, dotExitBtn.x, dotExitBtn.y, dotExitBtn.w, dotExitBtn.h, 22);
   ctx.fill();
@@ -783,15 +858,16 @@ function drawDotLetter(l) {
   const y = l.y - s;
   const w = s * 2;
   const r = Math.min(14, s);
+  const flashing = (l.wrongFlashUntil || 0) > Date.now();
   ctx.globalAlpha = l.found ? 0.25 : 1;
-  ctx.fillStyle = '#ffffff';
+  ctx.fillStyle = flashing ? '#ffe0dc' : '#ffffff';
   roundRectPath(ctx, x, y, w, w, r);
   ctx.fill();
-  ctx.lineWidth = 2;
-  ctx.strokeStyle = 'rgba(120,80,40,0.18)';
+  ctx.lineWidth = flashing ? 3 : 2;
+  ctx.strokeStyle = flashing ? '#e53935' : 'rgba(120,80,40,0.18)';
   roundRectPath(ctx, x, y, w, w, r);
   ctx.stroke();
-  ctx.fillStyle = '#5a2d00';
+  ctx.fillStyle = flashing ? '#c0392b' : '#5a2d00';
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
   ctx.font = 'bold ' + Math.round(s * 1.05) + 'px ' + (SPELL_FONT || 'sans-serif');
@@ -1035,7 +1111,7 @@ function drawPlaying() {
   // 顶部仅显示得分（带 +分 放大动画）
   const bump = scoreBumpTimer > 0 ? 1.3 : 1;
   ctx.save();
-  ctx.translate(W / 2, 56);
+  ctx.translate(W / 2, 56 + SAFE_TOP);
   ctx.scale(bump, bump);
   ctx.fillStyle = '#ff7a18';
   ctx.font = 'bold 44px sans-serif';
@@ -1043,7 +1119,7 @@ function drawPlaying() {
   ctx.restore();
 
   // 左上角“退出”按钮：游戏中可发起退出（弹框二次确认）
-  exitBtn = { x: 20, y: 20, w: 84, h: 44 };
+  exitBtn = { x: 20, y: 20 + SAFE_TOP, w: 84, h: 44 };
   ctx.fillStyle = 'rgba(255,255,255,0.85)';
   roundRectPath(ctx, exitBtn.x, exitBtn.y, exitBtn.w, exitBtn.h, 22);
   ctx.fill();
@@ -1171,6 +1247,25 @@ function drawSpeaker(rect) {
   ctx.beginPath(); ctx.arc(cx + r * 0.15, cy, r * 0.78, -Math.PI / 3.2, Math.PI / 3.2); ctx.stroke();
 }
 
+// 「读字母」喇叭按钮：与听发音喇叭同款的橙色圆，里面换成白色 abc 小字母。
+// 与听发音喇叭并排放在底部，点击后把当前单词按字母逐个念出来。
+function drawSpeakerAbc(rect) {
+  const cx = rect.x + rect.w / 2;
+  const cy = rect.y + rect.h / 2;
+  const r = Math.min(rect.w, rect.h) / 2;
+  ctx.fillStyle = '#ff7a18';
+  ctx.beginPath();
+  ctx.arc(cx, cy, r, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = '#ffffff';
+  const fs = Math.min(26, r * 0.6);
+  ctx.font = 'bold ' + fs + 'px ' + (SPELL_FONT || 'sans-serif');
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText('abc', cx, cy + 1);
+  ctx.textAlign = 'center'; // 恢复默认
+}
+
 // 一级菜单：选择年级/册次（三~六年级共 6 册，卡片超出屏幕时可上下滑动）
 function drawGrade() {
   ctx.fillStyle = bgGrad;
@@ -1192,8 +1287,8 @@ function drawGrade() {
 
   const cardW = Math.min(360, W - 80);
   const topY = Math.round(H * 0.22);
-  const gap = 12, bottomPad = 20;
-  const listH = (H - bottomPad) - topY;
+  const gap = 12;
+  const listH = LIST_BOTTOM - topY;
   const cardH = Math.max(62, Math.min(88, (listH - gap * (GRADES.length - 1)) / GRADES.length));
   const contentH = GRADES.length * cardH + gap * (GRADES.length - 1);
   const maxScroll = Math.max(0, contentH - listH);
@@ -1218,7 +1313,7 @@ function drawGrade() {
   if (maxScroll > 0) {
     ctx.fillStyle = '#a9713d';
     ctx.font = '13px sans-serif';
-    ctx.fillText('上下滑动查看更多册次', W / 2, H - 10);
+    ctx.fillText('上下滑动查看更多册次', W / 2, CONTENT_BOTTOM - 10);
   }
 }
 
@@ -1335,7 +1430,7 @@ function drawChapter() {
   const rowH = 72;
   const gap = 16;
   const listTop = startY;
-  const listBottom = H - 24;
+  const listBottom = CONTENT_BOTTOM - 24;
   const listH = listBottom - listTop;
   const contentH = SPELL_CHAPTERS.length * (rowH + gap);
   const maxScroll = Math.max(0, contentH - listH);
@@ -1403,6 +1498,7 @@ function drawSpellMode() {
     { mode: 'words', title: '全部单词', sub: '浏览本单元所有单词' },
     { mode: 'match', title: '单词对对碰', sub: '点英文卡听发音，英中配对消除' },
     { mode: 'link', title: '字母连连', sub: '拖动字母连成单词' },
+    { mode: 'progress', title: '错词本 · 学习统计', sub: '复习错词，查看练习进度' },
   ];
   const n = modes.length;
   // 卡片高度自适应：卡数越多越收紧间距与最小高度，保证小屏也能完整放下（不溢出）
@@ -1418,6 +1514,109 @@ function drawSpellMode() {
     spellModeCards.push({ rect, mode: m.mode });
     drawMenuCard(rect, m.title, m.sub, true, Math.min(32, cardH * 0.34));
   });
+}
+
+// ============ 错词本 / 学习统计（progress）============
+function enterProgress() {
+  progressScrollY = 0;
+  progressClearArmed = false;
+  state = 'progress';
+}
+
+// 从错词本进入复习：把错词当作 spellList 复用拼写练习流程，结束后回到错词本而非章节页。
+function startReviewWrong() {
+  const wrong = progress.getWrongWords();
+  if (!wrong.length) return;
+  spellList = shuffled(wrong.map((w) => ({ en: w.en, cn: w.cn })));
+  spellChapterName = '错词复习';
+  spellFromReview = true;
+  spellIndex = 0;
+  loadSpellWord(0);
+  state = 'spell';
+  if (spellMode === 'listen') {
+    setTimeout(() => { if (state === 'spell') speakWord(spellWord); }, 350);
+  }
+}
+
+function drawProgress() {
+  ctx.fillStyle = bgGrad;
+  ctx.fillRect(0, 0, W, H);
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+
+  progressBackBtn = { x: 14, y: 14 + SAFE_TOP, w: 52, h: 40 };
+  drawBackButton(progressBackBtn);
+
+  ctx.fillStyle = '#5a2d00';
+  ctx.font = 'bold ' + Math.min(30, W * 0.08) + 'px sans-serif';
+  ctx.fillText('错词本', W / 2, 46 + SAFE_TOP);
+
+  const st = progress.getStats();
+  const rate = st.practice > 0 ? Math.round(st.correct * 100 / st.practice) : 0;
+  ctx.fillStyle = '#8a5a2b';
+  ctx.font = Math.min(15, W * 0.04) + 'px sans-serif';
+  ctx.fillText('练习 ' + st.practice + ' 次 · 答对 ' + st.correct + ' 次 · 正确率 ' + rate + '%', W / 2, 82 + SAFE_TOP);
+
+  const wrong = progress.getWrongWords();
+  ctx.font = Math.min(13, W * 0.034) + 'px sans-serif';
+  ctx.fillText('待复习错词：' + wrong.length + ' 个', W / 2, 106 + SAFE_TOP);
+
+  // 两个操作按钮：复习 / 清除
+  const bw = Math.min(150, (W - 60) / 2);
+  const by = 126 + SAFE_TOP;
+  progressReviewBtn = { x: W / 2 - bw - 6, y: by, w: bw, h: 44 };
+  progressClearBtn = { x: W / 2 + 6, y: by, w: bw, h: 44 };
+  drawButton(progressReviewBtn, wrong.length ? '复习错词' : '暂无错词');
+  ctx.fillStyle = progressClearArmed ? '#fff3e0' : 'rgba(255,255,255,0.94)';
+  roundRectPath(ctx, progressClearBtn.x, progressClearBtn.y, progressClearBtn.w, progressClearBtn.h, 20);
+  ctx.fill();
+  ctx.lineWidth = 2;
+  ctx.strokeStyle = progressClearArmed ? '#c0392b' : 'rgba(120,80,40,0.35)';
+  roundRectPath(ctx, progressClearBtn.x, progressClearBtn.y, progressClearBtn.w, progressClearBtn.h, 20);
+  ctx.stroke();
+  ctx.fillStyle = progressClearArmed ? '#c0392b' : '#8a5a2b';
+  ctx.font = 'bold 17px sans-serif';
+  ctx.fillText(progressClearArmed ? '再点一次确认' : '清除记录',
+    progressClearBtn.x + progressClearBtn.w / 2, progressClearBtn.y + progressClearBtn.h / 2);
+
+  // 错词列表（可上下滑动）
+  progressListTop = by + 58;
+  progressListBottom = CONTENT_BOTTOM - 16;
+  const listH = Math.max(0, progressListBottom - progressListTop);
+  const rowH = 52;
+  const contentH = wrong.length * rowH;
+  const maxScroll = Math.max(0, contentH - listH);
+  if (progressScrollY < 0) progressScrollY = 0;
+  if (progressScrollY > maxScroll) progressScrollY = maxScroll;
+
+  if (!wrong.length) {
+    ctx.fillStyle = '#a98261';
+    ctx.font = Math.min(15, W * 0.04) + 'px sans-serif';
+    ctx.fillText('还没有错词，继续练习吧！', W / 2, progressListTop + 40);
+    return;
+  }
+
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(0, progressListTop, W, listH);
+  ctx.clip();
+  wrong.forEach((w, i) => {
+    const x = 20, y = progressListTop + i * rowH - progressScrollY;
+    ctx.fillStyle = 'rgba(255,255,255,0.9)';
+    roundRectPath(ctx, x, y + 4, W - 40, rowH - 8, 12);
+    ctx.fill();
+    ctx.textAlign = 'left';
+    ctx.fillStyle = '#5a2d00';
+    ctx.font = 'bold 20px ' + (SPELL_FONT || 'sans-serif');
+    ctx.fillText(w.en, x + 16, y + rowH / 2);
+    ctx.textAlign = 'right';
+    ctx.fillStyle = '#8a5a2b';
+    ctx.font = Math.min(16, W * 0.042) + 'px sans-serif';
+    const cn = String(w.cn).slice(0, 8);
+    ctx.fillText(cn + ' ×' + w.n, W - 36, y + rowH / 2);
+    ctx.textAlign = 'center';
+  });
+  ctx.restore();
 }
 
 // 单词拼写配置页（spellConfig）：练习方式（听音拼单词 / 中文转单词）+ 干扰强度（无 / 一倍 / 两倍）
@@ -1615,7 +1814,7 @@ function drawWordList() {
 
   // 列表区域（与 onTouchMove 滚动参数保持一致）
   const listTop = Math.round(H * 0.18);
-  const listBottom = H - 20;
+  const listBottom = LIST_BOTTOM;
   const listH = listBottom - listTop;
   const rowH = 60, gap = 8;
   const contentH = wordListItems.length * (rowH + gap);
@@ -1623,6 +1822,7 @@ function drawWordList() {
   if (wordListScrollY > maxScroll) wordListScrollY = maxScroll;
 
   wordListSpeakers = [];
+  wordListReadBtns = [];
   ctx.save();
   ctx.beginPath();
   ctx.rect(0, listTop, W, listH);
@@ -1636,21 +1836,31 @@ function drawWordList() {
     ctx.fillStyle = 'rgba(255,255,255,0.95)';
     roundRectPath(ctx, rx, y, rw, rowH, 14);
     ctx.fill();
-    // 英文（粗体）
+    // 英文（粗体）——右侧留出两个喇叭的宽度，避免长单词压到喇叭
+    const btnSize = 34, btnGap = 12;
+    const textRight = W - 32 - (btnSize * 2 + btnGap + 8);
     ctx.textAlign = 'left';
     ctx.textBaseline = 'middle';
     ctx.fillStyle = '#2e7d32';
-    ctx.font = 'bold 24px sans-serif';
-    ctx.fillText(it.en, rx + 16, y + 22);
+    let enFont = Math.min(24, W * 0.062);
+    ctx.font = 'bold ' + enFont + 'px sans-serif';
+    while (ctx.measureText(it.en).width > textRight - (rx + 16) && enFont > 14) {
+      enFont -= 1;
+      ctx.font = 'bold ' + enFont + 'px sans-serif';
+    }
+    ctx.fillText(it.en, rx + 16, y + 22, textRight - (rx + 16));
     // 中文释义（小一号）
     ctx.fillStyle = '#8a5a2b';
     ctx.font = '18px sans-serif';
-    ctx.fillText(it.cn, rx + 16, y + 43);
-    // 右侧小喇叭：点击播放真实发音（靠左一点，避免贴右边）
-    const spSize = 40;
-    const spRect = { x: W - 32 - spSize, y: y + (rowH - spSize) / 2, w: spSize, h: spSize };
-    drawSpeaker(spRect);
-    wordListSpeakers.push({ rect: spRect, word: it.en.toLowerCase() });
+    ctx.fillText(it.cn, rx + 16, y + 43, textRight - (rx + 16));
+    // 右侧两个同款圆喇叭并排：听发音（声波）+ 读字母（abc）
+    const btnY = y + (rowH - btnSize) / 2;
+    const readRect = { x: W - 32 - btnSize, y: btnY, w: btnSize, h: btnSize };
+    const speakRect = { x: readRect.x - btnGap - btnSize, y: btnY, w: btnSize, h: btnSize };
+    drawSpeaker(speakRect);
+    drawSpeakerAbc(readRect);
+    wordListSpeakers.push({ rect: speakRect, word: it.en.toLowerCase() });
+    wordListReadBtns.push({ rect: readRect, word: it.en.toLowerCase() });
   });
 
   ctx.restore();
@@ -1660,7 +1870,7 @@ function drawWordList() {
     ctx.textAlign = 'center';
     ctx.fillStyle = 'rgba(138,90,43,0.6)';
     ctx.font = '14px sans-serif';
-    ctx.fillText('上滑查看更多', W / 2, H - 8);
+    ctx.fillText('上滑查看更多', W / 2, CONTENT_BOTTOM - 8);
   }
 }
 
@@ -1826,7 +2036,7 @@ function drawMatch() {
   } else if (matchMsgTimer > 0) {
     ctx.fillStyle = '#e53935';
     ctx.font = 'bold 17px sans-serif';
-    ctx.fillText(matchMsg, W / 2, H - 22);
+    ctx.fillText(matchMsg, W / 2, CONTENT_BOTTOM - 22);
   }
 }
 
@@ -1935,10 +2145,22 @@ function onMatchTap(b) {
     a.flip = 0; b.flip = 0;            // 进入翻转消失动画（由主循环推进后移除）
     matchSel = null;
     matchMsg = ''; matchMsgTimer = 0;
+    const enCard = a.type === 'en' ? a : b;
+    const cnCard = a.type === 'cn' ? a : b;
+    progress.recordCorrect(currentGradeId, enCard.word || enCard.text, cnCard.text);
   } else {
     matchSel = null;
+    // 纠错：依次念出两张卡对应的英文单词，帮孩子建立音—义对应（中文卡平时保持安静）。
+    const wa = a.word || a.text, wb = b.word || b.text;
+    const parts = [];
+    if (wa) parts.push({ type: 'en', en: wa });
+    if (wb && wb !== wa) parts.push({ type: 'en', en: wb });
+    if (parts.length) speakSequence(parts, 320);
+    // 记错词：以这次错配里「中文卡对应的正确英文词」为准（而非孩子点的那张卡）
+    if (a.type === 'cn' && a.word) progress.recordWrong(currentGradeId, a.word, a.text);
+    else if (b.type === 'cn' && b.word) progress.recordWrong(currentGradeId, b.word, b.text);
     matchMsg = '不匹配，再试试～';
-    matchMsgTimer = 1100;
+    matchMsgTimer = 1400;
   }
 }
 
@@ -2016,12 +2238,13 @@ function drawSpell() {
       totalW += w + (i < input.length - 1 ? stepGap : 0);
     }
     let x = W / 2 - totalW / 2;              // 左起光标（字母左边缘）
-    ctx.fillStyle = '#5a2d00';
     for (let i = 0; i < input.length; i++) {
       const ch = input[i];
+      ctx.fillStyle = (i === spellWrongPos) ? '#c0392b' : '#5a2d00'; // 首个错位字母标红提示
       ctx.fillText(ch, x + adv[i] / 2, lineY[2]);
       x += adv[i] + stepGap;
     }
+    ctx.fillStyle = '#5a2d00';
     ctx.textBaseline = 'middle';              // 恢复，避免影响后续绘制
   }
 
@@ -2030,14 +2253,17 @@ function drawSpell() {
   const cols = 5;
   const gap = 12;                          // 方块间距（含行间距），紧凑排布
   const areaTop = boxY + boxH + 26;
-  const areaBottom = H - 130;              // 给底部小喇叭/中文卡留位
+  const footTop = CONTENT_BOTTOM - 116;    // 底部小喇叭/中文卡上沿（避开全面屏小黑条）
+  const areaBottom = footTop - 14;
   const areaW = W - sideMargin * 2;
   const cellW = areaW / cols;
-  const maxRows = 6;                       // 以最多 6 行为基准算方块尺寸，长单词也能放下
-  const byH = (areaBottom - areaTop - (maxRows - 1) * gap) / maxRows;
+  const count = spellCandidates.length;
+  // 按「实际需要的行数」分配高度，而不是固定 6 行：候选少时字母更大、矮屏不再被压成小点。
+  const rows = Math.max(1, Math.ceil(count / cols));
+  const byH = (areaBottom - areaTop - (rows - 1) * gap) / rows;
   let size = Math.min(cellW - gap, byH);
   if (size > 76) size = 76;                // 上限，避免过大
-  const count = spellCandidates.length;
+  if (size < 30) size = 30;                // 下限，保证幼儿可看清、可点准
   const gridW = cols * cellW;
   const startX = sideMargin + (areaW - gridW) / 2 + cellW / 2;
   const startY = areaTop + size / 2 + 4;
@@ -2053,16 +2279,23 @@ function drawSpell() {
     drawSpellTile(x, y, size, c.ch, c.selected, i);
   });
 
-  // 底部区域：听音模式显示小喇叭（点击重听）；中文转单词模式显示中文释义（替代喇叭位置）
+  // 底部区域：听音模式「听发音」+「读字母」两个同款喇叭并排；中文转单词模式仅显示中文释义卡（无喇叭）。
+  const spkSize = 88, spkGap = 20;
+  const spkY = footTop + (116 - spkSize) / 2;
   if (spellMode === 'listen') {
-    spellSpeakerBtn = { x: W / 2 - 46, y: H - 104, w: 92, h: 92 };
+    const grpW = spkSize * 2 + spkGap;
+    const gx = W / 2 - grpW / 2;
+    spellSpeakerBtn = { x: gx, y: spkY, w: spkSize, h: spkSize };
+    spellReadBtn = { x: gx + spkSize + spkGap, y: spkY, w: spkSize, h: spkSize };
     drawSpeaker(spellSpeakerBtn);
+    drawSpeakerAbc(spellReadBtn);
   } else {
     spellSpeakerBtn = null;
+    spellReadBtn = null;   // 中文模式无读字母喇叭，显式置空避免残留上一次的点击区
     const zhW = Math.min(360, W - 80);
     const zhH = 84;
     const zhX = W / 2 - zhW / 2;
-    const zhY = H - 104;
+    const zhY = footTop;
     ctx.fillStyle = 'rgba(255,255,255,0.97)';
     roundRectPath(ctx, zhX, zhY, zhW, zhH, 20);
     ctx.fill();
@@ -2218,9 +2451,10 @@ function resolveLinkPath() {
   const t = linkTargets.find((x) => !x.found && (x.en === s || x.en === rev));
   if (!t) {
     linkMsg = '再试试';
-    linkMsgTimer = 900;
+    linkMsgTimer = 1100;
     return;
   }
+  progress.recordCorrect(currentGradeId, t.en, t.cn);   // 记录一次正确作答
   t.found = true;
   t.cells = cells;
   // 连对后列表会重排（未找到的顶到前面），顺手回到顶部，省掉一次手动滑回
@@ -2331,7 +2565,7 @@ function drawLink() {
   //    仅这一块区域可上下拖动（网格区拖动作连线），真放不下时才「滑出来」。
   const lastCell = linkCellRects[linkCellRects.length - 1];
   linkListTop = (lastCell ? lastCell.y + cellW + 12 : Math.round(H * 0.70));
-  linkListBottom = H - 12;
+  linkListBottom = CONTENT_BOTTOM - 12;
   const listCols = 2;
   const listColW = (W - 32) / listCols;
   const listH = Math.max(0, linkListBottom - linkListTop);
@@ -2361,14 +2595,34 @@ function drawLink() {
   const shownTargets = linkTargets
     .filter((t) => !t.found)
     .concat(linkTargets.filter((t) => t.found));
+  linkTargetSpeakers = [];
   shownTargets.forEach((t, i) => {
-    const cx = 16 + (i % listCols) * listColW + listColW / 2;
+    const col = i % listCols;
+    const cellX = 16 + col * listColW;
     const cy = linkListTop + Math.floor(i / listCols) * listRowH + listRowH / 2 - linkListScrollY;
+    // 每行右侧一个小喇叭：点击念该词英文，补上「先听音再连线」的输入环节。
+    const spR = Math.min(13, listRowH * 0.36);
+    const spX = cellX + listColW - spR - 6;
+    linkTargetSpeakers.push({ rect: { x: spX - spR, y: cy - spR, w: spR * 2, h: spR * 2 }, word: t.en });
+    ctx.fillStyle = t.found ? 'rgba(46,125,50,0.55)' : '#ff7a18';
+    ctx.beginPath();
+    ctx.arc(spX, cy, spR, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#ffffff';
+    const bw = spR * 0.5, bh = spR * 0.62;
+    ctx.fillRect(spX - spR * 0.62, cy - bh / 2, bw * 0.6, bh);
+    ctx.beginPath();
+    ctx.moveTo(spX - spR * 0.62 + bw * 0.6, cy - bh / 2);
+    ctx.lineTo(spX - spR * 0.62 + bw * 1.2, cy - bh * 0.85);
+    ctx.lineTo(spX - spR * 0.62 + bw * 1.2, cy + bh * 0.85);
+    ctx.lineTo(spX - spR * 0.62 + bw * 0.6, cy + bh / 2);
+    ctx.closePath();
+    ctx.fill();
+    // 文字占据喇叭左侧空间，截断到 5 字避免重叠；连对后仍显示中文并打勾。
     ctx.fillStyle = t.found ? '#2e7d32' : '#8a5a2b';
-    // 释义过长会在两列布局里溢出，统一截断到 7 字；连对后仍显示中文并打勾，
-    // 不替换成英文单词——大小写版本切换只作用于网格字母。
-    const hint = String(t.cn || t.en).slice(0, 7);
-    ctx.fillText(t.found ? '✓ ' + hint : hint + '（' + t.en.length + '）', cx, cy);
+    const hint = String(t.cn || t.en).slice(0, 5);
+    const textCx = cellX + (listColW - spR * 2 - 12) / 2;
+    ctx.fillText(t.found ? '✓' + hint : hint + '（' + t.en.length + '）', textCx, cy);
   });
   ctx.restore();
 
@@ -2495,6 +2749,7 @@ function draw() {
   else if (state === 'match') drawMatch();
   else if (state === 'link') drawLink();
   else if (state === 'dictation') drawDictation();
+  else if (state === 'progress') drawProgress();
 }
 
 // ============ 单词听写（dictation）============
@@ -2512,9 +2767,31 @@ function startDictation(chapterId) {
   dictIndex = 0;
   dictTimerMs = DICT_INTERVALS[dictIntervalIdx];
   dictPlaying = true;
-  dictShowEn = false;
+  dictLoadAnswer();
+  dictQuizOpen = false;
   state = 'dictation';
   dictPlayCurrent();  // 在点击手势链内播第一词，满足 iOS 首次发音解锁要求
+}
+
+// 该题是否可用「字母块作答」：仅纯字母、长度 2~10 的单词；短语/超长词降级为「揭晓+自评」。
+function dictCanAnswer(word) {
+  return /^[a-z]+$/i.test(word) && word.length >= 2 && word.length <= 10;
+}
+
+// 载入当前词的作答字母块（打乱的字母，无干扰项；听写重点在「听音拼写」而非辨形干扰）。
+function dictLoadAnswer() {
+  const w = dictWords[dictIndex];
+  dictAnswerTiles = [];
+  dictAnswerOrder = [];
+  dictSolved = false;
+  dictShowEn = false;
+  dictWrongPos = -1;
+  dictWrongRecorded = false;
+  if (!w || !dictCanAnswer(w.en)) return;
+  const letters = w.en.toLowerCase().split('');
+  shuffled(letters).forEach((ch, idx) => {
+    dictAnswerTiles.push({ ch, idx, selected: false });
+  });
 }
 
 // 按当前模式构造发音序列并播放
@@ -2524,13 +2801,49 @@ function dictPlayCurrent() {
   speakSequence(buildDictParts(dictMode, w.en), DICT_GAP_MS);
 }
 
+// 点击作答字母块：与拼写页一致，选中追加、再点取消；拼对判对并播发音，拼错纠错+记错词。
+function dictTapTile(idx) {
+  const tile = dictAnswerTiles[idx];
+  if (!tile || dictSolved) return;
+  if (tile.selected) {
+    const oi = dictAnswerOrder.indexOf(idx);
+    if (oi >= 0) dictAnswerOrder.splice(oi, 1);
+    tile.selected = false;
+  } else {
+    tile.selected = true;
+    dictAnswerOrder.push(idx);
+  }
+  const w = dictWords[dictIndex];
+  if (!w) return;
+  const target = w.en.toLowerCase();
+  const input = dictAnswerOrder.map((i) => dictAnswerTiles[i].ch).join('');
+  if (input === target) {
+    dictSolved = true;
+    dictWrongPos = -1;
+    dictShowEn = true;
+    progress.recordCorrect(currentGradeId, w.en, w.cn);
+    speakWord(w.en);
+  } else if (input.length === target.length) {
+    let pos = -1;
+    for (let i = 0; i < input.length; i++) { if (input[i] !== target[i]) { pos = i; break; } }
+    if (!dictWrongRecorded) {
+      dictWrongRecorded = true;
+      progress.recordWrong(currentGradeId, w.en, w.cn);
+    }
+    if (pos !== dictWrongPos) { dictWrongPos = pos; announceLetter(target[pos], 500); }
+  } else {
+    dictWrongPos = -1;
+  }
+}
+
 // delta=1 下一个、-1 上一个、0 重播当前；到头/到尾循环
 function dictGoto(delta) {
   const n = dictWords.length;
   if (!n) return;
   dictIndex = wrapIndex(dictIndex, delta, n);
   dictTimerMs = DICT_INTERVALS[dictIntervalIdx];  // 手动切换后重新计时
-  dictShowEn = false;
+  dictLoadAnswer();
+  dictQuizOpen = false;
   dictPlayCurrent();
 }
 
@@ -2550,6 +2863,192 @@ function dictDrawButton(rect, label, active, size) {
   ctx.fillText(label, rect.x + rect.w / 2, rect.y + rect.h / 2);
 }
 
+// 听写输入框内按「英文书写规范」绘制字母串：与中文拼单词输入框同款——
+// 用小写 x 的实际字高校准字号使 x-height 等于中格高度，以书写基线对齐，字母紧凑连续。
+// wrongPos>=0 时该位置标红；baselineY 为四线格基线，lineGap 为中格高度。
+function drawDictWritingText(text, centerX, baselineY, lineGap, wrongPos, color) {
+  const family = SPELL_FONT || 'sans-serif';
+  let fz = lineGap * 2;
+  ctx.font = fz + 'px ' + family;
+  const xh = ctx.measureText('x').actualBoundingBoxAscent || (fz * 0.5);
+  fz = fz * (lineGap / xh);
+  ctx.font = fz + 'px ' + family;
+  ctx.textBaseline = 'alphabetic';
+  const stepGap = fz * 0.12;
+  const adv = [];
+  let totalW = 0;
+  for (let i = 0; i < text.length; i++) {
+    const cw = ctx.measureText(text[i]).width;
+    adv.push(cw);
+    totalW += cw + (i < text.length - 1 ? stepGap : 0);
+  }
+  let x = centerX - totalW / 2;
+  for (let i = 0; i < text.length; i++) {
+    ctx.fillStyle = (i === wrongPos) ? '#c0392b' : color;
+    ctx.fillText(text[i], x + adv[i] / 2, baselineY);
+    x += adv[i] + stepGap;
+  }
+  ctx.textBaseline = 'middle'; // 恢复，避免影响后续绘制
+}
+
+// 听写作答弹层：可作答词显示字母块，短语/超长词显示「记住了/没记住」自评。
+function drawDictQuiz() {
+  const w = dictWords[dictIndex];
+  if (!w) return;
+  ctx.fillStyle = 'rgba(0,0,0,0.5)';
+  ctx.fillRect(0, 0, W, H);
+
+  const cardW = Math.min(360, W - 40);
+  const cardH = Math.min(430, H - 60);
+  const cardX = W / 2 - cardW / 2;
+  const cardY = H / 2 - cardH / 2;
+  ctx.fillStyle = '#ffffff';
+  roundRectPath(ctx, cardX, cardY, cardW, cardH, 24);
+  ctx.fill();
+
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillStyle = '#5a2d00';
+  ctx.font = 'bold ' + Math.min(26, W * 0.07) + 'px sans-serif';
+  ctx.fillText('听写作答', W / 2, cardY + 34);
+
+  // 中文题面
+  const cn = w.cn || w.en;
+  let cnSize = Math.min(30, W * 0.078);
+  ctx.font = 'bold ' + cnSize + 'px sans-serif';
+  while (ctx.measureText(cn).width > cardW - 40 && cnSize > 15) {
+    cnSize -= 2; ctx.font = 'bold ' + cnSize + 'px sans-serif';
+  }
+  ctx.fillStyle = '#8a5a2b';
+  ctx.fillText(cn, W / 2, cardY + 76);
+
+  dictQuizBtns = {};
+
+  if (dictCanAnswer(w.en)) {
+    // 已选字母的输入行：复用中文拼单词的「英文书写四线三格」样式
+    const input = dictAnswerOrder.map((i) => dictAnswerTiles[i].ch).join('');
+    const lineGap = 16, pad = 9;
+    const boxW = cardW - 48;
+    const boxH = lineGap * 3 + pad * 2;
+    const boxX = cardX + 24;
+    const boxY = cardY + 96;
+
+    // 白底圆角卡片
+    ctx.fillStyle = 'rgba(240,248,255,0.9)';
+    roundRectPath(ctx, boxX, boxY, boxW, boxH, 12);
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(90,150,210,0.5)'; ctx.lineWidth = 1.5;
+    roundRectPath(ctx, boxX, boxY, boxW, boxH, 12);
+    ctx.stroke();
+
+    // 四线三格的四条横线（中格两条稍淡，像英语本）
+    const lineY = [];
+    for (let k = 0; k < 4; k++) lineY.push(boxY + pad + k * lineGap);
+    const innerL = boxX + 10, innerR = boxX + boxW - 10;
+    for (let k = 0; k < 4; k++) {
+      ctx.beginPath();
+      ctx.moveTo(innerL, lineY[k]);
+      ctx.lineTo(innerR, lineY[k]);
+      ctx.lineWidth = (k === 1 || k === 2) ? 1 : 1.5;
+      ctx.strokeStyle = (k === 1 || k === 2) ? 'rgba(90,150,210,0.35)' : 'rgba(90,150,210,0.6)';
+      ctx.stroke();
+    }
+
+    ctx.textBaseline = 'middle';
+    if (dictSolved) {
+      // 拼对/揭晓：整词按书写规范展示，绿色
+      drawDictWritingText(w.en, W / 2, lineY[2], lineGap, -1, '#2e7d32');
+    } else {
+      let disp = '';
+      for (let i = 0; i < dictAnswerOrder.length; i++) {
+        disp += (i === dictWrongPos) ? '·' : dictAnswerTiles[dictAnswerOrder[i]].ch;
+      }
+      if (disp) {
+        drawDictWritingText(disp, W / 2, lineY[2], lineGap, dictWrongPos, '#5a2d00');
+      } else {
+        // 空输入时的内置占位提示：灰色小字
+        ctx.fillStyle = '#bbbbbb';
+        ctx.font = Math.min(20, boxW * 0.05) + 'px ' + (SPELL_FONT || 'sans-serif');
+        ctx.fillText('拼出单词', W / 2, (lineY[1] + lineY[2]) / 2);
+      }
+    }
+
+    // 字母块网格（5 列）
+    const cols = 5, gap = 8, side = 24;
+    const availW = cardW - side * 2;
+    const cell = (availW - gap * (cols - 1)) / cols;
+    const size = Math.min(cell, 52);
+    const rows = Math.ceil(dictAnswerTiles.length / cols);
+    const gridTop = boxY + boxH + 4;
+    dictAnswerTiles.forEach((tile, i) => {
+      const col = i % cols, row = Math.floor(i / cols);
+      const cx = cardX + side + cell / 2 + col * (cell + gap);
+      const cy = gridTop + size / 2 + row * (size + gap);
+      const x = cx - size / 2, y = cy - size / 2;
+      tile.rect = { x, y, w: size, h: size };
+      ctx.globalAlpha = tile.selected ? 0.35 : 1;
+      ctx.fillStyle = LETTER_COLORS[i % LETTER_COLORS.length];
+      roundRectPath(ctx, x, y, size, size, 12);
+      ctx.fill();
+      ctx.globalAlpha = 1;
+      ctx.fillStyle = '#ffffff';
+      ctx.font = 'bold ' + Math.round(size * 0.5) + 'px ' + (SPELL_FONT || 'sans-serif');
+      ctx.fillText(tile.ch, cx, cy);
+    });
+
+    // 底部按钮行：重听 / 看答案 / 下一个（未拼对时“下一个”禁用显示）
+    const btnY = cardY + cardH - 74;
+    const gapB = 8;
+    const bw = (cardW - 48 - gapB * 2) / 3;
+    const bx = cardX + 24;
+    dictQuizBtns.speak = { x: bx, y: btnY, w: bw, h: 52 };
+    dictQuizBtns.reveal = { x: bx + bw + gapB, y: btnY, w: bw, h: 52 };
+    dictQuizBtns.next = { x: bx + (bw + gapB) * 2, y: btnY, w: bw, h: 52 };
+    dictDrawButton(dictQuizBtns.speak, '重听', false, 16);
+    dictDrawButton(dictQuizBtns.reveal, '看答案', false, 16);
+    ctx.fillStyle = dictSolved ? '#ff7a18' : 'rgba(200,200,200,0.8)';
+    roundRectPath(ctx, dictQuizBtns.next.x, btnY, bw, 52, 14);
+    ctx.fill();
+    ctx.fillStyle = '#ffffff';
+    ctx.font = 'bold 17px sans-serif';
+    ctx.fillText('下一个', dictQuizBtns.next.x + bw / 2, btnY + 26);
+    if (dictShowEn && !dictSolved) {
+      ctx.fillStyle = '#c0392b';
+      ctx.font = 'bold 20px ' + (SPELL_FONT || 'sans-serif');
+      ctx.fillText(w.en, W / 2, gridTop + rows * (size + gap) + 6);
+    }
+  } else {
+    // 短语/超长词：直接揭晓英文 + 自评
+    ctx.fillStyle = '#2e7d32';
+    let enSize = Math.min(28, W * 0.07);
+    ctx.font = 'bold ' + enSize + 'px ' + (SPELL_FONT || 'sans-serif');
+    while (ctx.measureText(w.en).width > cardW - 40 && enSize > 13) {
+      enSize -= 2; ctx.font = 'bold ' + enSize + 'px ' + (SPELL_FONT || 'sans-serif');
+    }
+    ctx.fillText(w.en, W / 2, cardY + 150);
+    ctx.fillStyle = '#a98261';
+    ctx.font = Math.min(15, W * 0.04) + 'px sans-serif';
+    ctx.fillText('会拼写这个单词吗？', W / 2, cardY + 196);
+
+    const btnY = cardY + cardH - 110;
+    const gapB = 10;
+    const bw = (cardW - 48 - gapB) / 2;
+    const bx = cardX + 24;
+    dictQuizBtns.yes = { x: bx, y: btnY, w: bw, h: 52 };
+    dictQuizBtns.no = { x: bx + bw + gapB, y: btnY, w: bw, h: 52 };
+    ctx.fillStyle = '#2e7d32';
+    roundRectPath(ctx, dictQuizBtns.yes.x, btnY, bw, 52, 14); ctx.fill();
+    ctx.fillStyle = '#c0392b';
+    roundRectPath(ctx, dictQuizBtns.no.x, btnY, bw, 52, 14); ctx.fill();
+    ctx.fillStyle = '#ffffff';
+    ctx.font = 'bold 18px sans-serif';
+    ctx.fillText('记住了', dictQuizBtns.yes.x + bw / 2, btnY + 26);
+    ctx.fillText('没记住', dictQuizBtns.no.x + bw / 2, btnY + 26);
+    dictQuizBtns.next = { x: cardX + 24, y: btnY + 64, w: cardW - 48, h: 44 };
+    dictDrawButton(dictQuizBtns.next, '下一个', false, 17);
+  }
+}
+
 function drawDictation() {
   ctx.fillStyle = bgGrad;
   ctx.fillRect(0, 0, W, H);
@@ -2564,7 +3063,7 @@ function drawDictation() {
   ctx.fillText('单词听写', W / 2, Math.round(H * 0.09));
   ctx.fillStyle = '#8a5a2b';
   ctx.font = Math.min(16, W * 0.042) + 'px sans-serif';
-  ctx.fillText('听发音，写单词 · 可手动翻词', W / 2, Math.round(H * 0.145));
+  ctx.fillText('听发音，点卡片作答 · 可手动翻词', W / 2, Math.round(H * 0.145));
   if (dictChapterName) {
     ctx.font = Math.min(14, W * 0.036) + 'px sans-serif';
     ctx.fillText(dictChapterName, W / 2, Math.round(H * 0.185));
@@ -2675,6 +3174,8 @@ function drawDictation() {
   ctx.fillStyle = '#a98261';
   ctx.font = Math.min(13, W * 0.034) + 'px sans-serif';
   ctx.fillText('到点自动下一个并循环 · 手动切换会重新计时', W / 2, cY + cH + 26);
+
+  if (dictQuizOpen) drawDictQuiz();
 }
 
 // 小游戏渲染循环：优先用 canvas.requestAnimationFrame（Canvas 2D 节点方法，官方推荐）
@@ -2701,7 +3202,7 @@ function loop() {
   if (matchMsgTimer > 0) matchMsgTimer -= dt;
   if (linkMsgTimer > 0) linkMsgTimer -= dt;
   // 单词听写：到点自动翻下一个词并循环；暂停或手动切换后重新计时
-  if (state === 'dictation' && dictPlaying && dictWords.length) {
+  if (state === 'dictation' && dictPlaying && dictWords.length && !dictQuizOpen) {
     dictTimerMs -= dt;
     if (dictTimerMs <= 0) dictGoto(1);
   }
@@ -2764,6 +3265,7 @@ adapter.onTouchStart((e) => {
     gradePendingCard = null;
     gradeTouchStartY = py;
     gradeTouchMoved = false;
+    lastTouchY = py;   // 初始化滚动锚点，保证第一个 touchMove 就能判定滑动
     for (const c of gradeCards) {
       if (hit(c.rect, px, py)) { gradePendingCard = c.id; break; }
     }
@@ -2780,11 +3282,13 @@ adapter.onTouchStart((e) => {
     }
   } else if (state === 'chapter') {
     if (hit(backBtn, px, py)) { state = 'grade'; return; }
+    // 与年级页一致：按下先记录命中卡片，抬手且未判定为滑动才真正进入，避免滑动误触跳页。
+    chapterPendingCard = null;
+    chapterTouchStartY = py;
+    chapterTouchMoved = false;
+    lastTouchY = py;   // 初始化滚动锚点，保证第一个 touchMove 就能判定滑动
     for (const item of chapterCards) {
-      if (hit(item.rect, px, py)) {
-        if (item.enabled) { spellChapterId = item.id; state = 'spellMode'; } // 进入模式选择页
-        return;
-      }
+      if (hit(item.rect, px, py)) { if (item.enabled) chapterPendingCard = item.id; break; }
     }
   } else if (state === 'spellMode') {
     if (hit(spellModeBackBtn, px, py)) { state = 'chapter'; chapterScrollY = 0; return; }
@@ -2795,6 +3299,7 @@ adapter.onTouchStart((e) => {
         else if (item.mode === 'match') startMatch(spellChapterId);
         else if (item.mode === 'link') startLink(spellChapterId);
         else if (item.mode === 'dict') startDictation(spellChapterId);
+        else if (item.mode === 'progress') enterProgress();
         return;
       }
     }
@@ -2811,6 +3316,16 @@ adapter.onTouchStart((e) => {
       startSpellChapter(spellChapterId, spellConfigMode);
       return;
     }
+  } else if (state === 'progress') {
+    lastTouchY = py;   // 初始化滚动锚点，避免进入本页首帧跳动
+    if (hit(progressBackBtn, px, py)) { state = 'spellMode'; return; }
+    if (hit(progressReviewBtn, px, py)) { startReviewWrong(); return; }
+    if (hit(progressClearBtn, px, py)) {
+      if (progressClearArmed) { progress.clearAll(); progressClearArmed = false; }
+      else progressClearArmed = true;
+      return;
+    }
+    return;
   } else if (state === 'dotConfig') {
     if (hit(dotConfigBack, px, py)) { state = 'home'; return; } // 返回找字母主页
     for (const opt of dotConfigOpts) {
@@ -2837,6 +3352,12 @@ adapter.onTouchStart((e) => {
     if (linkDone) { state = 'spellMode'; return; }   // 完成态点任意处返回
     // 大小写版本切换：只翻显示标志，本局网格数据、进度、中文提示都不变
     if (hit(linkCaseBtn, px, py)) { linkLowercase = !linkLowercase; return; }
+    // 目标行小喇叭：点击念该词（连线前听音）；仅在释义可视区内才响应。
+    if (py >= linkListTop && py <= linkListBottom) {
+      for (const sp of linkTargetSpeakers) {
+        if (sp.rect.y >= linkListTop - sp.rect.h && hit(sp.rect, px, py)) { speakWord(sp.word); return; }
+      }
+    }
     // 底部释义区按下 = 滚动列表（与网格连线互斥，避免一边滑一边连线）
     if (linkListTop > 0 && py >= linkListTop && py <= linkListBottom && linkListContentH > 0) {
       linkListDragging = true;
@@ -2852,9 +3373,35 @@ adapter.onTouchStart((e) => {
       linkLastPoint = { x: px, y: py };
     }
   } else if (state === 'dictation') {
+    // 作答弹层优先响应
+    if (dictQuizOpen) {
+      const w = dictWords[dictIndex];
+      if (dictCanAnswer(w.en)) {
+        if (dictQuizBtns.speak && hit(dictQuizBtns.speak, px, py)) { speakWord(w.en); return; }
+        if (dictQuizBtns.reveal && hit(dictQuizBtns.reveal, px, py)) {
+          // 看答案：未拼对则记一次错词并揭晓；置 solved 仅为放行「下一个」按钮（不计正确）
+          if (!dictSolved) { progress.recordWrong(currentGradeId, w.en, w.cn); speakWord(w.en); }
+          dictShowEn = true;
+          dictSolved = true;
+          return;
+        }
+        if (dictQuizBtns.next && dictSolved && hit(dictQuizBtns.next, px, py)) { dictGoto(1); return; }
+        for (const tile of dictAnswerTiles) {
+          if (tile.rect && hit(tile.rect, px, py)) { dictTapTile(tile.idx); return; }
+        }
+      } else {
+        if (dictQuizBtns.yes && hit(dictQuizBtns.yes, px, py)) {
+          progress.recordCorrect(currentGradeId, w.en, w.cn); dictGoto(1); return;
+        }
+        if (dictQuizBtns.no && hit(dictQuizBtns.no, px, py)) {
+          progress.recordWrong(currentGradeId, w.en, w.cn); dictGoto(1); return;
+        }
+        if (dictQuizBtns.next && hit(dictQuizBtns.next, px, py)) { dictGoto(1); return; }
+      }
+      return;   // 弹层期间不响应底层按钮
+    }
     if (hit(dictBackBtn, px, py)) { stopSpeakSequence(); state = 'spellMode'; return; }
-    if (hit(dictPrevBtn, px, py)) { dictGoto(-1); return; }
-    if (hit(dictNextBtn, px, py)) { dictGoto(1); return; }
+    if (hit(dictPrevBtn, px, py)) { dictGoto(-1); return; }    if (hit(dictNextBtn, px, py)) { dictGoto(1); return; }
     if (hit(dictPlayBtn, px, py)) {
       dictPlaying = !dictPlaying;
       if (dictPlaying) {
@@ -2876,10 +3423,13 @@ adapter.onTouchStart((e) => {
         return;
       }
     }
-    if (hit(dictCardRect, px, py)) { dictShowEn = !dictShowEn; return; }
+    if (hit(dictCardRect, px, py)) { dictQuizOpen = true; return; } // 点卡片打开作答弹层
     return;
   } else if (state === 'wordList') {
     if (hit(wordListBackBtn, px, py)) { state = 'spellMode'; return; }
+    for (const sp of wordListReadBtns) {
+      if (hit(sp.rect, px, py)) { announceWord(sp.word); return; }
+    }
     for (const sp of wordListSpeakers) {
       if (hit(sp.rect, px, py)) { speakWord(sp.word); return; }
     }
@@ -2917,16 +3467,24 @@ adapter.onTouchStart((e) => {
       // 继续游戏：解除暂停（恢复到对应玩法）
       state = (lastMode === 'dot') ? 'dotMode' : 'playing';
       lastTime = Date.now();
+      // 修复死锁：掉落玩法在「本组清空→定时器开下一组」的窗口内退出时，
+      // 定时器回调若在 confirmExit 状态下触发会被 state 判断吞掉，回来后 groupActive=false
+      // 且再无定时器，屏幕永久无字母。取消时若正处于该窗口，主动清掉旧定时器并补开一组。
+      if (lastMode !== 'dot' && !groupActive) {
+        if (groupTimer) { clearTimeout(groupTimer); groupTimer = null; }
+        startGroup();
+      }
       return;
     }
   } else if (state === 'spell') {
-    if (hit(spellBackBtn, px, py)) { state = 'spellMode'; return; } // 返回模式选择页
+    if (hit(spellBackBtn, px, py)) { state = spellFromReview ? 'progress' : 'spellMode'; return; } // 返回（复习时回错词本）
     if (spellSolved) {
       if (hit(spellDialogSpeakBtn, px, py)) { speakWord(spellWord); return; } // 答对弹框：再听一遍发音
       if (hit(spellNextBtn, px, py)) nextSpellWord(); // 答对弹框：下一个
       return;
     }
     if (spellSpeakerBtn && hit(spellSpeakerBtn, px, py)) { speakWord(spellWord); return; } // 重听单词（仅听音模式）
+    if (spellReadBtn && hit(spellReadBtn, px, py)) { announceWord(spellWord); return; } // 读字母：逐字母念出当前单词
     for (const tile of spellTileRects) {
       if (hit(tile, px, py)) { toggleCandidate(tile.idx); return; }
     }
@@ -2975,7 +3533,7 @@ adapter.onTouchMove((e) => {
     lastTouchY = null;
     return;
   }
-  if (state !== 'grade' && state !== 'chapter' && state !== 'wordList') { lastTouchY = null; return; }
+  if (state !== 'grade' && state !== 'chapter' && state !== 'wordList' && state !== 'progress') { lastTouchY = null; return; }
   const p = getPoint(e);
   if (!p) return;
   if (lastTouchY !== null) {
@@ -2984,32 +3542,41 @@ adapter.onTouchMove((e) => {
       if (Math.abs(p.y - gradeTouchStartY) > 8) gradeTouchMoved = true;
       gradeScrollY -= dy;
       const topY = Math.round(H * 0.22);
-      const gap = 12, bottomPad = 20;
-      const listH = (H - bottomPad) - topY;
+      const gap = 12;
+      const listH = LIST_BOTTOM - topY;
       const cardH = Math.max(62, Math.min(88, (listH - gap * (GRADES.length - 1)) / GRADES.length));
       const contentH = GRADES.length * cardH + gap * (GRADES.length - 1);
       const maxScroll = Math.max(0, contentH - listH);
       if (gradeScrollY < 0) gradeScrollY = 0;
       if (gradeScrollY > maxScroll) gradeScrollY = maxScroll;
     } else if (state === 'chapter') {
+      if (Math.abs(p.y - chapterTouchStartY) > 8) chapterTouchMoved = true;
       chapterScrollY -= dy;
       const startY = Math.round(H * 0.22);
       const rowH = 72, gap = 16;
-      const listH = (H - 24) - startY;
+      const listH = (CONTENT_BOTTOM - 24) - startY;
       const contentH = SPELL_CHAPTERS.length * (rowH + gap);
       const maxScroll = Math.max(0, contentH - listH);
       if (chapterScrollY < 0) chapterScrollY = 0;
       if (chapterScrollY > maxScroll) chapterScrollY = maxScroll;
-    } else { // wordList
+    } else if (state === 'wordList') {
       wordListScrollY -= dy;
       const listTop = Math.round(H * 0.18);
-      const listBottom = H - 20;
+      const listBottom = LIST_BOTTOM;
       const listH = listBottom - listTop;
       const rowH = 60, gap = 8;
       const contentH = wordListItems.length * (rowH + gap);
       const maxScroll = Math.max(0, contentH - listH);
       if (wordListScrollY < 0) wordListScrollY = 0;
       if (wordListScrollY > maxScroll) wordListScrollY = maxScroll;
+    } else if (state === 'progress') {
+      progressScrollY -= dy;
+      const rowH = 52;
+      const listH = Math.max(0, progressListBottom - progressListTop);
+      const contentH = progress.getWrongWords().length * rowH;
+      const maxScroll = Math.max(0, contentH - listH);
+      if (progressScrollY < 0) progressScrollY = 0;
+      if (progressScrollY > maxScroll) progressScrollY = maxScroll;
     }
   }
   lastTouchY = p.y;
@@ -3023,6 +3590,12 @@ adapter.onTouchEnd(() => {
     const id = gradePendingCard;
     gradePendingCard = null;
     enterGrade(id);
+  }
+  if (state === 'chapter' && !chapterTouchMoved && chapterPendingCard) {
+    const id = chapterPendingCard;
+    chapterPendingCard = null;
+    spellChapterId = id;
+    state = 'spellMode';
   }
   // 字母连连：抬手结算本次连线
   if (state === 'link' && linkDragging) {

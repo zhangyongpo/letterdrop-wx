@@ -15,6 +15,9 @@ const adapter = require('../platform/adapter');
 
 const ctxMap = {};
 
+// 逐字母拼读时，相邻两个字母之间的停顿（毫秒）。调小=更紧凑，调大=更清晰。
+const LETTER_SPELL_GAP_MS = 80;
+
 // 当前正在播放的单词音频：快速连点不同卡片时先停上一条，避免多个发音叠在一起
 let activeWordCtx = null;
 // 逐字母拼读回退链的代号：新的一次点读会让旧链自行终止
@@ -105,7 +108,7 @@ function announceWord(word, gapMs, onDone) {
     activeWordCtx = null;
   }
   const letters = String(word).toLowerCase().replace(/[^a-z]/g, '').split('');
-  const gap = typeof gapMs === 'number' ? gapMs : 260;
+  const gap = typeof gapMs === 'number' ? gapMs : LETTER_SPELL_GAP_MS;
   let i = 0;
   const playNext = () => {
     if (gen !== fallbackGen) return;
@@ -239,11 +242,11 @@ function playEnPart(en, onEnded) {
   const f = slug(en);
   const list = (WORD_AUDIO && WORD_AUDIO[currentGrade]) || [];
   if (list.indexOf(f) < 0 || !readyMap[currentGrade]) {
-    announceWord(en, 260, () => onEnded(true));
+    announceWord(en, LETTER_SPELL_GAP_MS, () => onEnded(true));
     return;
   }
   playPart(packageRoot(currentGrade) + f + '.mp3', onEnded,
-    () => announceWord(en, 260, () => onEnded(true)));
+    () => announceWord(en, LETTER_SPELL_GAP_MS, () => onEnded(true)));
 }
 
 // 中文片段：中文音频未就绪时直接跳过（不逐字拼读中文），由序列立即接下一段
